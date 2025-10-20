@@ -1,0 +1,6 @@
+# synergy-ai/.gcloudignore
+*
+!main.py
+!requirements.txt
+!Dockerfile
+!wordbank.txt

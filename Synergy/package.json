@@ -1,0 +1,20 @@
+{
+  "name": "synergy-game",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "DEBUG=1 node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "http": "^0.0.1-security",
+    "nanoid": "^5.0.7",
+    "node-fetch": "^3.3.2",
+    "socket.io": "^4.7.5"
+  }
+}

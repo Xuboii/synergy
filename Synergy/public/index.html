@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Synergy</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="topbar">
+        <h1>Synergy</h1>
+        <div class="roomline">
+          <span id="roomLabel" class="room hidden">
+            Room: <strong id="roomCode"></strong>
+            <button id="copyHeaderCode" class="chip">Copy</button>
+          </span>
+        </div>
+      </header>
+
+      <!-- LOBBY -->
+      <section id="lobby" class="card">
+        <h2>Lobby</h2>
+
+        <div class="grid2">
+          <div class="stack lg">
+            <label class="stack sm">
+              <span>Display name</span>
+              <input id="name" placeholder="Your name" />
+            </label>
+
+            <div class="row actions">
+              <button id="createBtn" class="primary">Create Room</button>
+              <button id="createAIBtn" title="Create a room with an AI teammate">Play vs AI</button>
+              <span class="muted">or</span>
+              <input id="joinCode" class="w-160" placeholder="Room code" />
+              <button id="joinBtn">Join Room</button>
+            </div>
+
+            <div id="lobbyRoom" class="panel hidden">
+              <div class="row spaced">
+                <div class="stack sm">
+                  <strong>Your room</strong>
+                  <div class="codepill">
+                    <span id="lobbyRoomCode">------</span>
+                    <button id="copyLobbyCode" class="chip">Copy</button>
+                  </div>
+                  <span class="muted">Share this code with your teammate</span>
+                </div>
+                <button id="leaveBtnLobby">Leave Room</button>
+              </div>
+            </div>
+
+            <p id="authMsg" class="msg"></p>
+          </div>
+
+          <div class="hint">
+            <p class="hint-title">How to play</p>
+            <ol class="tight">
+              <li>Two players are teammates. Goal is to say the same word.</li>
+              <li>Each round both players send a private word.</li>
+              <li>When both have sent a word the pair is revealed.</li>
+              <li>You have 30 seconds per round. Missed input counts as “(no guess)”.</li>
+              <li>No activity for 60 seconds closes the room.</li>
+              <li>Exact match means you win.</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <!-- GAME -->
+      <section id="game" class="hidden">
+        <div class="card stack lg">
+          <div class="row spaced">
+            <div class="stack sm">
+              <h2>Team Round</h2>
+              <span>Status: <strong id="status">In Game</strong></span>
+            </div>
+            <button id="leaveBtn">Leave Room</button>
+          </div>
+
+          <div class="players panel">
+            <h3>Teammates</h3>
+            <ul id="players"></ul>
+          </div>
+
+          <div id="inputPanel" class="panel stack md">
+            <div class="row spaced">
+              <h3>Your guess</h3>
+              <div class="timer"><span id="countdown">30</span>s left</div>
+            </div>
+            <form id="wordForm" class="row">
+              <input id="wordInput" placeholder="Type a word" autocomplete="off" />
+              <button type="submit" class="primary">Submit</button>
+            </form>
+            <p id="waitMsg" class="msg"></p>
+          </div>
+
+          <div class="panel">
+            <h3>History</h3>
+            <div id="historyTable" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RESULTS or PARTNER LEFT -->
+      <section id="results" class="card hidden center">
+        <h2 id="resultTitle">You matched</h2>
+        <p id="resultSubtitle" class="muted"></p>
+        <div id="resultsButtons" class="row gap-16">
+          <button id="rematchBtn" class="primary">Play again</button>
+          <button id="backToLobbyBtn">Return to lobby</button>
+        </div>
+        <p id="rematchMsg" class="msg"></p>
+      </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="./client.js"></script>
+  </body>
+</html>

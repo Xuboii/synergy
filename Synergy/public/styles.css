@@ -1,0 +1,195 @@
+:root {
+  --bg: #0f1115;
+  --card: #171a21;
+  --panel: #1e2330;
+  --muted: #9aa3b2;
+  --text: #e7ecf3;
+  --primary: #5b8cff;
+  --primary-600: #3e6df0;
+  --border: #2a3141;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+}
+
+.container { max-width: 900px; margin: 0 auto; padding: 24px; }
+
+/* header */
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.topbar h1 { margin: 0; font-size: 28px; letter-spacing: 0.3px; }
+
+.room { padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+.chip { margin-left: 8px; padding: 4px 8px; font-size: 12px; }
+
+/* cards and panels */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-top: 10px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.25);
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 14px;
+}
+
+/* layouts */
+.row { display: flex; align-items: center; gap: 12px; }
+.row.gap-16 { gap: 16px; }
+.spaced { justify-content: space-between; }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.stack.sm { gap: 6px; }
+.stack.md { gap: 10px; }
+.stack.lg { gap: 14px; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+
+.actions { gap: 12px; flex-wrap: wrap; }
+
+/* inputs and buttons */
+input {
+  background: #0f1320;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  border-radius: 10px;
+  outline: none;
+}
+input:focus { border-color: var(--primary); }
+
+button {
+  background: #222840;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--primary); }
+button.primary {
+  background: var(--primary);
+  border-color: var(--primary-600);
+  color: white;
+}
+button.primary:hover { filter: brightness(0.95); }
+
+.w-160 { width: 160px; }
+
+/* lists and text */
+ul { margin: 6px 0 0 16px; }
+h2, h3 { margin: 6px 0 10px 0; }
+.muted { color: var(--muted); }
+/* make sure hidden always hides */
+.hidden { display: none !important; }
+
+/* hint box */
+.hint { background: var(--panel); border: 1px dashed var(--border); border-radius: 12px; padding: 14px; }
+.hint-title { font-weight: 600; margin: 0 0 6px 0; }
+
+/* code pill */
+.codepill {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  background: #0f1320;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+
+/* history table */
+.table-wrap { width: 100%; overflow-x: auto; }
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0f1320;
+}
+.table thead th {
+  text-align: left;
+  padding: 10px 12px;
+  background: #121831;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.table tbody tr:nth-child(odd) td {
+  background: #0f152a;
+}
+
+/* center without touching display */
+.center { margin: 40px auto; max-width: 600px; text-align: center; }
+
+/* Center the Return to Lobby button when shown alone */
+#resultsButtons {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+#resultsButtons button {
+  min-width: 120px;
+  text-align: center;
+}
+
+
+/* timer */
+.timer {
+  font-weight: 600;
+  background: #0f1320;
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+/* results center state already looks good; no extra styles needed */
+
+.col-round { width: 80px; color: var(--muted); font-weight: 600; }
+.col-word .tag {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: 8px;
+  background: #0d1224;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+.col-word .guess {
+  display: inline-block;
+  font-weight: 600;
+}
+
+.copied-indicator {
+  margin-left: 6px;
+  color: #22c55e; /* green success text */
+  font-weight: 600;
+  font-size: 0.9rem;
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+
+.copied-indicator.fade-out {
+  opacity: 0;
+}
