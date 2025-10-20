@@ -96,33 +96,54 @@ function bumpAfk(code, tag = "") {
   }, 70_000);
 }
 
+// quick neutral seeds if round 1 AI is slow
+const LOCAL_SEEDS = ["apple", "river", "music", "paper", "sky", "stone", "light", "train", "coffee", "garden"];
+
 async function maybeMakeBotSubmission(room) {
   try {
-    // Words used in completed rounds. Do not include this round so the bot can match the player.
     const exclude = getUsedWordsFromHistory(room);
-
     const { prevHuman, prevBot } = getPrevRoundWords(room);
 
     let botWord;
+
     if (!prevHuman && !prevBot) {
-      // Round 1: ask AI to pick a random allowed word
-      const rand = await getRandomWord(exclude);
-      botWord = rand?.choice || "apple";
+      // Round 1: try AI quickly, else local seed
+      try {
+        const rand = await getRandomWord(exclude, { abortMs: 12000 });
+        botWord = rand?.choice;
+      } catch {
+        // local seed not in exclude
+        botWord = LOCAL_SEEDS.find(w => !exclude.includes(w)) || "apple";
+      }
     } else {
-      const ai = await getNextWordUsingPrev(prevHuman, prevBot, exclude, { beta: 0.5, gamma: 0.5, top_k: 12 });
-      botWord = ai?.choice || (await getRandomWord(exclude))?.choice || "apple";
+      // Later rounds: allow more time
+      try {
+        const ai = await getNextWordUsingPrev(prevHuman, prevBot, exclude, { beta: 0.5, gamma: 0.5, top_k: 12, abortMs: 20000 });
+        botWord = ai?.choice;
+      } catch {
+        botWord = null;
+      }
+      if (!botWord) {
+        // as a last resort, ask AI for a quick seed, else local
+        try {
+          const rand = await getRandomWord(exclude, { abortMs: 10000 });
+          botWord = rand?.choice;
+        } catch {
+          botWord = LOCAL_SEEDS.find(w => !exclude.includes(w)) || "apple";
+        }
+      }
     }
 
-    room.submissions[room.botId] = botWord;
-    room.prevBot = botWord;
+    room.submissions[room.botId] = botWord || "apple";
+    room.prevBot = room.submissions[room.botId];
   } catch (err) {
-    console.warn("[AI] error, using random fallback:", err?.message || err);
+    console.warn("[AI] error, using local fallback:", err?.message || err);
     const exclude = getUsedWordsFromHistory(room);
-    const rand = await getRandomWord(exclude).catch(() => null);
-    room.submissions[room.botId] = rand?.choice || "apple";
+    const seed = LOCAL_SEEDS.find(w => !exclude.includes(w)) || "apple";
+    room.submissions[room.botId] = seed;
+    room.prevBot = seed;
   }
 }
-
 
 
 function startRound(code) {
