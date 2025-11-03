@@ -49,32 +49,44 @@ def pick_seed(exclude: List[str]) -> str:
     return "bridge"
 
 def build_prompt(prev_human: str, prev_bot: str, exclude: List[str]) -> List[dict]:
-    """Build inputs for the Responses API."""
+    """
+    Prompt the model to converge on the teammate's likely guess, using ONLY the
+    previous round pair (A, B). Matching the teammate is desirable.
+    """
     rules = (
         "You are playing a converging-words game.\n"
-        "You only see the previous round's two words: A and B.\n"
-        "Return exactly one common associative English word that relates to BOTH A and B.\n"
-        "Rules:\n"
-        "1) One word only\n"
+        "You see ONLY the previous round's two words: A and B.\n"
+        "Goal: return a single common associative English word that BOTH A and B suggest.\n"
+        "Convergence rule: choose the most obvious bridge word that a human teammate is also likely to pick.\n"
+        "It is OK to match the teammate's guess. Do NOT avoid matches.\n"
+        "Hard rules:\n"
+        "1) Return exactly one word\n"
         "2) Lowercase a-z only\n"
         "3) No spaces, punctuation, numbers, or hyphens\n"
-        "4) Do not return A or B\n"
-        "5) Do not return any word in the exclude list\n"
+        "4) Do NOT return A or B\n"
+        "5) Do NOT return any word in the exclude list\n"
+        "6) Ignore the literal string '(no guess)' completely if present\n"
         "Examples:\n"
         "A=car, B=road -> highway\n"
         "A=pirates, B=treasure -> map\n"
         "A=apple, B=yellow -> banana\n"
     )
+    # remove literal '(no guess)' defensively before showing to the model
+    A = prev_human if prev_human != "(no guess)" else ""
+    B = prev_bot if prev_bot != "(no guess)" else ""
+    ex_clean = [w for w in (exclude or []) if w and w != "(no guess)"]
+
     user = (
-        f"A={prev_human}\n"
-        f"B={prev_bot}\n"
-        f"exclude={exclude}\n"
+        f"A={A}\n"
+        f"B={B}\n"
+        f"exclude={ex_clean}\n"
         f"Return only the single connecting word."
     )
     return [
         {"role": "system", "content": rules},
         {"role": "user", "content": user},
     ]
+
 
 def extract_output_text(data: dict) -> Optional[str]:
     """
@@ -184,6 +196,13 @@ async def nextword(req: NextWordReq):
         exclude.append(prev_h)
     if prev_b not in exclude:
         exclude.append(prev_b)
+
+    # NEW: ignore literal '(no guess)' in excludes and in the pair
+    exclude = [w for w in exclude if w and w != "(no guess)"]
+    if prev_h == "(no guess)":
+        prev_h = ""
+    if prev_b == "(no guess)":
+        prev_b = ""
 
     word = await call_openai_connector(prev_h, prev_b, exclude)
 
