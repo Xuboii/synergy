@@ -19,7 +19,7 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const ROUND_SECONDS = 30;
 const AFK_CLOSE_SECONDS = 70;
 
-// static
+// static and health
 app.use(express.static(PUBLIC_DIR));
 app.get("/healthz", (_, res) => res.json({ ok: true }));
 
@@ -27,8 +27,7 @@ app.get("/healthz", (_, res) => res.json({ ok: true }));
 const rooms = new Map(); // code -> room
 
 function makeCode() {
-  const chars =
-    "ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnopqrstuvwxyz";
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnopqrstuvwxyz";
   let s = "";
   for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
   return s;
@@ -43,14 +42,20 @@ function makeRoom() {
     status: "playing",
     round: 1,
     deadline: nowMs() + ROUND_SECONDS * 1000,
-    players: [], // [{id, name}]
-    history: [], // [{round, human, ai}]
+    players: [],                 // [{id, name}]
+    history: [],                 // [{round, human, ai}]
+    // current round state
     lastHuman: "",
     lastAI: "",
     submittedHuman: false,
     submittedAI: false,
+    // previous round pair used to form the next connection
+    prevHuman: "",
+    prevAI: "",
+    // timers
     lastActivity: nowMs(),
     afkTimer: null,
+    roundTimer: null,
   };
   rooms.set(code, room);
   return room;
@@ -59,6 +64,7 @@ function makeRoom() {
 function scheduleAfkClose(room) {
   if (room.afkTimer) clearTimeout(room.afkTimer);
   room.afkTimer = setTimeout(() => {
+    if (room.roundTimer) clearTimeout(room.roundTimer);
     io.to(room.code).emit("room:closed", { text: "Room closed due to inactivity" });
     rooms.delete(room.code);
   }, AFK_CLOSE_SECONDS * 1000);
@@ -81,6 +87,21 @@ function startRound(room) {
   room.deadline = nowMs() + ROUND_SECONDS * 1000;
   room.submittedHuman = false;
   room.submittedAI = false;
+
+  // reset timer for this round and enforce auto "(no guess)"
+  if (room.roundTimer) clearTimeout(room.roundTimer);
+  room.roundTimer = setTimeout(() => {
+    if (!room.submittedHuman) {
+      room.lastHuman = "(no guess)";
+      room.submittedHuman = true;
+    }
+    if (!room.submittedAI) {
+      room.lastAI = "(no guess)";
+      room.submittedAI = true;
+    }
+    maybeFinishRound(room);
+  }, ROUND_SECONDS * 1000);
+
   emitUpdate(room, "roundStart");
   scheduleAfkClose(room);
 }
@@ -88,15 +109,22 @@ function startRound(room) {
 async function maybeFinishRound(room) {
   if (!(room.submittedHuman && room.submittedAI)) return;
   const r = room.round;
-  room.history.push({ round: r, human: room.lastHuman || "(no guess)", ai: room.lastAI || "(no guess)" });
+  room.history.push({
+    round: r,
+    human: room.lastHuman || "(no guess)",
+    ai: room.lastAI || "(no guess)",
+  });
+
+  // remember this pair for the next round
+  room.prevHuman = room.lastHuman || "";
+  room.prevAI = room.lastAI || "";
+
   emitUpdate(room, "postSubmit");
-  // brief delay feels snappier
   setTimeout(() => startRound(room), 400);
 }
 
 // ---------------- sockets ----------------
 io.on("connection", socket => {
-  // convenience for logs
   const log = (...a) => console.log("[S]", ...a);
 
   socket.on("room:create", ({ name }) => {
@@ -130,8 +158,8 @@ io.on("connection", socket => {
       if (ix >= 0) {
         room.players.splice(ix, 1);
         emitUpdate(room, "leave");
-        // if host left and only AI or nobody remains, close
         if (room.players.length <= 1) {
+          if (room.roundTimer) clearTimeout(room.roundTimer);
           io.to(room.code).emit("room:closed", { text: "Your teammate left" });
           rooms.delete(room.code);
         }
@@ -142,11 +170,13 @@ io.on("connection", socket => {
   });
 
   socket.on("game:submit", async ({ word }) => {
+    // find the room by membership
     let found = null;
     for (const r of rooms.values()) {
-      if (r.players.some(p => p.id === socket.id) || r.players.some(p => p.id === "AI" && r.players.find(q => q.id === socket.id))) {
-        found = r; break;
-      }
+      if (
+        r.players.some(p => p.id === socket.id) ||
+        r.players.some(p => p.id === "AI" && r.players.find(q => q.id === socket.id))
+      ) { found = r; break; }
     }
     if (!found) return;
 
@@ -157,12 +187,27 @@ io.on("connection", socket => {
     if (!room.submittedHuman) {
       room.lastHuman = String(word || "").trim() || "(no guess)";
       room.submittedHuman = true;
-      // ask AI right after human submits
+
       try {
-        const exclude = [];
-        if (room.lastHuman) exclude.push(room.lastHuman);
-        if (room.lastAI) exclude.push(room.lastAI);
-        const aiWord = await getNextWord(room.lastHuman, room.lastAI || "", exclude);
+        // Build exclude list from entire room history and current fields
+        const ex = new Set();
+        room.history.forEach(h => {
+          if (h.human) ex.add(h.human);
+          if (h.ai) ex.add(h.ai);
+        });
+        if (room.prevHuman) ex.add(room.prevHuman);
+        if (room.prevAI) ex.add(room.prevAI);
+        if (room.lastHuman) ex.add(room.lastHuman);
+        if (room.lastAI) ex.add(room.lastAI);
+        ex.delete("(no guess)");
+
+        // Use previous round pair to form the next connection
+        const aiWord = await getNextWord(
+          room.prevHuman || "",
+          room.prevAI || "",
+          Array.from(ex)
+        );
+
         room.lastAI = aiWord || "(no guess)";
         room.submittedAI = true;
       } catch (e) {
@@ -170,6 +215,7 @@ io.on("connection", socket => {
         room.lastAI = "(no guess)";
         room.submittedAI = true;
       }
+
       await maybeFinishRound(room);
     } else {
       // if somehow AI already took a turn, treat this as overwrite
@@ -184,6 +230,7 @@ io.on("connection", socket => {
       const ix = room.players.findIndex(p => p.id === socket.id);
       if (ix >= 0) room.players.splice(ix, 1);
       if (room.players.length <= 1) {
+        if (room.roundTimer) clearTimeout(room.roundTimer);
         io.to(room.code).emit("room:closed", { text: "Your teammate left" });
         rooms.delete(room.code);
       } else {
