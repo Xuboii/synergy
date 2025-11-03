@@ -25,9 +25,11 @@ HEADERS = {
 
 # A small neutral seed list for round 1 or any fallback
 NEUTRAL_SEEDS = [
-    "river", "paper", "stone", "light", "bridge", "garden", "train", "coffee",
-    "forest", "ocean", "music", "field", "story", "circle", "map", "cloud",
+    "bridge", "link", "common", "middle", "center",
+    "focus", "union", "merge", "pair", "match",
+    "signal", "theme", "point", "route", "path",
 ]
+
 
 WORD_RE = re.compile(r"^[a-z]{2,20}$")
 
@@ -42,11 +44,11 @@ def sanitize_word(text: Optional[str]) -> str:
     return ""
 
 def pick_seed(exclude: List[str]) -> str:
-    for w in NEUTRAL_SEEDS:
-        if w not in exclude:
-            return w
-    # extreme edge: everything excluded
-    return "bridge"
+    pool = [w for w in NEUTRAL_SEEDS if w not in exclude]
+    if not pool:
+        return "bridge"
+    return random.choice(pool)
+
 
 def build_prompt(prev_human: str, prev_bot: str, exclude: List[str]) -> List[dict]:
     """

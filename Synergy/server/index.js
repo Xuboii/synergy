@@ -132,6 +132,7 @@ function wordsUsedSoFar(room) {
   return Array.from(ex);
 }
 
+// replace your maybeFinishRound with this version
 async function maybeFinishRound(room) {
   if (room.roundClosed) return;
   if (!(room.submittedHuman && room.submittedAI)) return;
@@ -144,13 +145,26 @@ async function maybeFinishRound(room) {
   const ai = room.lastAI || "(no guess)";
   room.history.push({ round: r, human, ai });
 
-  // remember previous pair for next round, but ignore "(no guess)"
-  room.prevHuman = human === "(no guess)" ? "" : human;
-  room.prevAI = ai === "(no guess)" ? "" : ai;
+  // UPDATE: only carry forward the pair if both are real words
+  const realHuman = human !== "(no guess)";
+  const realAI = ai !== "(no guess)";
+  if (realHuman && realAI) {
+    room.prevHuman = human;
+    room.prevAI = ai;
+  }
+  // else: keep the previous valid pair so the next round still uses it
+
+  // Optional win check (keep your existing behavior if you already had this)
+  if (realHuman && human === ai) {
+    io.to(room.code).emit("room:closed", { text: "You matched! 🎉" });
+    rooms.delete(room.code);
+    return;
+  }
 
   emitUpdate(room, "postSubmit");
   setTimeout(() => startRound(room), 400);
 }
+
 
 // ---------------- sockets ----------------
 io.on("connection", socket => {
