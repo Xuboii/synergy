@@ -1,443 +1,200 @@
-import express from "express";
+// server/index.js  (ESM)
+// Run with: node index.js
 import http from "http";
-import { Server as SocketIOServer } from "socket.io";
-import fetch from "node-fetch";
-import { customAlphabet } from "nanoid";
-if (!global.fetch) global.fetch = fetch;
+import path from "path";
+import { fileURLToPath } from "url";
+import express from "express";
+import { Server } from "socket.io";
+import { getNextWord } from "./aiClient.js";
 
-import { getNextWordUsingPrev, getRandomWord } from "./aiClient.js";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-
-// logging helpers
-const DEBUG = (process.env.DEBUG || "0") === "1";
-const ts = () => new Date().toISOString().slice(11, 19);
-function slog(...args) { if (DEBUG) console.log(`[S ${ts()}]`, ...args); }
-function ilog(...args) { if (DEBUG) console.info(`[I ${ts()}]`, ...args); }
-function elog(...args) { console.error(`[E ${ts()}]`, ...args); }
-
-// room code generator
-const nanoid = customAlphabet("ABCDEFGHJKMNPQRSTUVWXYZ23456789", 6);
-
-// server objects
 const app = express();
 const server = http.createServer(app);
-const io = new SocketIOServer(server, { cors: { origin: "*" } });
+const io = new Server(server, { cors: { origin: "*" } });
 
-app.use(express.static("public"));
-app.get("/healthz", (req, res) => res.json({ ok: true, ts: Date.now() }));
+const PUBLIC_DIR = path.join(__dirname, "..", "public");
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+const ROUND_SECONDS = 30;
+const AFK_CLOSE_SECONDS = 70;
 
+// static
+app.use(express.static(PUBLIC_DIR));
+app.get("/healthz", (_, res) => res.json({ ok: true }));
 
-/*
-rooms[code] = {
-  players: Map<socketId, { name }>,
-  submissions: { [socketId]: string },
-  history: [{ round, pairs: [{ id, name, word }] }],
-  status: "lobby" | "playing" | "won",
-  winnerRound: number | null,
-  rematchReady: Set<socketId>,
-  roundTimer: NodeJS.Timeout | null,
-  deadline: number | null,
-  afkTimer: NodeJS.Timeout | null,
-  lastActivity: number,
-  closing: boolean,
-  // AI fields
-  ai: boolean,
-  botId: string | null,
-  prevBot: string | null
+// ---------------- room state ----------------
+const rooms = new Map(); // code -> room
+
+function makeCode() {
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnopqrstuvwxyz";
+  let s = "";
+  for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
 }
-*/
-const rooms = {};
 
-function getRoom(code) { return rooms[code] || null; }
-function getPartnerId(room, me) { for (const id of room.players.keys()) if (id !== me) return id; return null; }
+function nowMs() { return Date.now(); }
 
-function snapshot(code) {
-  const room = rooms[code];
-  if (!room) return null;
-  const players = Array.from(room.players.entries()).map(([id, p]) => ({ id, name: p.name }));
-  return {
+function makeRoom() {
+  const code = makeCode();
+  const room = {
     code,
-    players,
-    history: room.history,
-    status: room.status,
-    winnerRound: room.winnerRound,
-    rematchReady: Array.from(room.rematchReady || []),
-    deadline: room.deadline || null,
+    status: "playing",
+    round: 1,
+    deadline: nowMs() + ROUND_SECONDS * 1000,
+    players: [], // [{id, name}]
+    history: [], // [{round, human, ai}]
+    lastHuman: "",
+    lastAI: "",
+    submittedHuman: false,
+    submittedAI: false,
+    lastActivity: nowMs(),
+    afkTimer: null,
   };
+  rooms.set(code, room);
+  return room;
 }
-function broadcast(code, tag = "") {
-  const room = rooms[code];
-  if (!room || room.closing) { slog(`broadcast skipped ${code} tag=${tag}`); return; }
-  const s = snapshot(code);
-  if (s) {
-    slog(`broadcast room:update -> ${code} tag=${tag} status=${s.status} players=${s.players.length}`);
-    io.to(code).emit("room:update", s);
-  }
-}
-function clearRoundTimer(room) { if (room.roundTimer) clearTimeout(room.roundTimer); room.roundTimer = null; room.deadline = null; }
-function clearAfk(room) { if (room.afkTimer) clearTimeout(room.afkTimer); room.afkTimer = null; }
-function closeRoom(code, reasonText, reason) {
-  const room = rooms[code];
-  if (!room) return;
-  room.closing = true;
-  clearRoundTimer(room); clearAfk(room);
-  slog(`closeRoom ${code} reason=${reason || "none"} text="${reasonText}"`);
-  io.to(code).emit("room:closed", { text: reasonText || "Room closed", reason: reason || null });
-  delete rooms[code];
-}
-function touch(code) { const room = rooms[code]; if (room && !room.closing) room.lastActivity = Date.now(); }
-function bumpAfk(code, tag = "") {
-  const room = rooms[code]; if (!room || room.closing) return;
-  touch(code); clearAfk(room);
-  slog(`bumpAfk ${code} tag=${tag}`);
+
+function scheduleAfkClose(room) {
+  if (room.afkTimer) clearTimeout(room.afkTimer);
   room.afkTimer = setTimeout(() => {
-    const r = rooms[code]; if (!r || r.closing) return; if (r.status === "won") return;
-    closeRoom(code, "Room closed due to inactivity", "afk");
-  }, 70_000);
+    io.to(room.code).emit("room:closed", { text: "Room closed due to inactivity" });
+    rooms.delete(room.code);
+  }, AFK_CLOSE_SECONDS * 1000);
 }
 
-async function maybeMakeBotSubmission(room) {
-  try {
-    // Words used in completed rounds. Do not include this round so the bot can match the player.
-    const exclude = getUsedWordsFromHistory(room);
-
-    const { prevHuman, prevBot } = getPrevRoundWords(room);
-
-    let botWord;
-    if (!prevHuman && !prevBot) {
-      // Round 1: ask AI to pick a random allowed word
-      const rand = await getRandomWord(exclude);
-      botWord = rand?.choice || "apple";
-    } else {
-      const ai = await getNextWordUsingPrev(prevHuman, prevBot, exclude, { beta: 0.5, gamma: 0.5, top_k: 12 });
-      botWord = ai?.choice || (await getRandomWord(exclude))?.choice || "apple";
-    }
-
-    room.submissions[room.botId] = botWord;
-    room.prevBot = botWord;
-  } catch (err) {
-    console.warn("[AI] error, using random fallback:", err?.message || err);
-    const exclude = getUsedWordsFromHistory(room);
-    const rand = await getRandomWord(exclude).catch(() => null);
-    room.submissions[room.botId] = rand?.choice || "apple";
-  }
+function emitUpdate(room, tag = "") {
+  io.to(room.code).emit("room:update", {
+    tag,
+    code: room.code,
+    status: room.status,
+    round: room.round,
+    deadline: room.deadline,
+    players: room.players.map(p => ({ id: p.id, name: p.name })),
+    history: room.history.map(r => ({ round: r.round, human: r.human, ai: r.ai })),
+  });
 }
 
-
-
-function startRound(code) {
-  const room = rooms[code];
-  if (!room || room.closing || room.status !== "playing") return;
-
-  room.submissions = {};
-  room.deadline = Date.now() + 30_000;
-
-  slog(`startRound ${code} round=${room.history.length + 1}`);
-  io.to(code).emit("game:round", { round: room.history.length + 1, deadline: room.deadline });
-
-  clearRoundTimer(room);
-  room.roundTimer = setTimeout(async () => {
-    const r = rooms[code];
-    if (!r || r.closing || r.status !== "playing") return;
-
-    if (r.ai && !r.submissions[r.botId]) {
-      await maybeMakeBotSubmission(r);
-    }
-
-    const roundNum = r.history.length + 1;
-    const pairs = Array.from(r.players.keys()).map((id) => ({
-      id,
-      name: r.players.get(id)?.name || "Player",
-      word: r.submissions[id] ? r.submissions[id] : "(no guess)",
-    }));
-
-    slog(`autoReveal ${code} round=${roundNum}`);
-    io.to(code).emit("game:reveal", { round: roundNum, pairs });
-    r.history.push({ round: roundNum, pairs });
-
-    const unique = new Set(pairs.map((p) => p.word.toLowerCase()));
-    const allReal = pairs.every((p) => p.word && p.word.toLowerCase() !== "(no guess)");
-
-    if (allReal && unique.size === 1) {
-      r.status = "won";
-      r.winnerRound = roundNum;
-      slog(`game:win ${code} round=${roundNum} word="${pairs[0].word}"`);
-      io.to(code).emit("game:win", { round: roundNum, word: pairs[0].word });
-      clearRoundTimer(r);
-      broadcast(code, "win");
-      return;
-    }
-
-    broadcast(code, "afterReveal");
-    startRound(code);
-  }, 30_000);
+function startRound(room) {
+  room.round += room.history.length === 0 ? 0 : 1; // first call keeps round=1
+  room.deadline = nowMs() + ROUND_SECONDS * 1000;
+  room.submittedHuman = false;
+  room.submittedAI = false;
+  emitUpdate(room, "roundStart");
+  scheduleAfkClose(room);
 }
 
-// Words used in completed rounds only, do NOT look at current submissions.
-// This allows matching in the current round.
-function getUsedWordsFromHistory(room) {
-  const used = new Set();
-  for (const h of room.history || []) {
-    for (const p of h.pairs || []) {
-      const w = p.word;
-      if (w && w !== "(no guess)") used.add(w.toLowerCase());
-    }
-  }
-  return Array.from(used);
+async function maybeFinishRound(room) {
+  if (!(room.submittedHuman && room.submittedAI)) return;
+  const r = room.round;
+  room.history.push({ round: r, human: room.lastHuman || "(no guess)", ai: room.lastAI || "(no guess)" });
+  emitUpdate(room, "postSubmit");
+  // brief delay feels snappier
+  setTimeout(() => startRound(room), 400);
 }
 
-// Previous round’s human and AI words
-function getPrevRoundWords(room) {
-  if (!room.history || room.history.length === 0) return { prevHuman: null, prevBot: null };
-  const last = room.history[room.history.length - 1];
-  let prevHuman = null, prevBot = null;
-  for (const p of last.pairs || []) {
-    if (p.id === room.botId) prevBot = p.word;
-    else prevHuman = p.word;
-  }
-  return { prevHuman, prevBot };
-}
+// ---------------- sockets ----------------
+io.on("connection", socket => {
+  // convenience for logs
+  const log = (...a) => console.log("[S]", ...a);
 
-// AFK sweep
-setInterval(() => {
-  const now = Date.now();
-  for (const code of Object.keys(rooms)) {
-    const room = rooms[code];
-    if (!room || room.closing) continue;
-    if (room.status === "won") continue;
-    const idle = now - (room.lastActivity || 0);
-    if (idle >= 70_000) {
-      slog(`AFK sweep closing ${code} idleMs=${idle}`);
-      closeRoom(code, "Room closed due to inactivity", "afk");
-    }
-  }
-}, 5_000);
-
-// sockets
-io.on("connection", (socket) => {
-  let currentRoom = null;
-  const sid = socket.id.slice(-4);
-  slog(`socket connected ${socket.id}`);
-
-  socket.on("room:create", ({ name }, ack) => {
-    const code = nanoid();
-    rooms[code] = {
-      players: new Map(),
-      submissions: {},
-      history: [],
-      status: "lobby",
-      winnerRound: null,
-      rematchReady: new Set(),
-      roundTimer: null,
-      deadline: null,
-      afkTimer: null,
-      lastActivity: Date.now(),
-      closing: false,
-      ai: false,
-      botId: null,
-      prevBot: null
-    };
-    socket.join(code);
-    rooms[code].players.set(socket.id, { name: name?.trim() || "Player" });
-    currentRoom = code;
-    slog(`room:create ${code} by ${sid} name="${name}"`);
-    ack?.({ ok: true, code });
-    broadcast(code, "create");
-    bumpAfk(code, "create");
+  socket.on("room:create", ({ name }) => {
+    const room = makeRoom();
+    room.players.push({ id: socket.id, name: name || "Player" });
+    socket.join(room.code);
+    log("room:create", room.code, "by", socket.id, "name=", name);
+    startRound(room);
   });
 
-  // New: AI room creation
-  socket.on("room:create:ai", ({ name }, ack) => {
-    const code = nanoid();
-    const botId = `bot:${code}`;
-    rooms[code] = {
-      players: new Map(),
-      submissions: {},
-      history: [],
-      status: "playing",
-      winnerRound: null,
-      rematchReady: new Set(),
-      roundTimer: null,
-      deadline: null,
-      afkTimer: null,
-      lastActivity: Date.now(),
-      closing: false,
-      ai: true,
-      botId,
-      prevBot: null
-    };
-    socket.join(code);
-    rooms[code].players.set(socket.id, { name: name?.trim() || "Player" });
-    rooms[code].players.set(botId, { name: "AI" });
-    currentRoom = code;
-    slog(`room:create:ai ${code} by ${sid} name="${name}"`);
-    ack?.({ ok: true, code });
-    broadcast(code, "createAI");
-    startRound(code);
+  socket.on("room:create:ai", ({ name }) => {
+    const room = makeRoom();
+    room.players.push({ id: socket.id, name: name || "Player" });
+    room.players.push({ id: "AI", name: "AI" });
+    socket.join(room.code);
+    log("room:create:ai", room.code, "by", socket.id, "name=", name);
+    startRound(room);
   });
 
-  socket.on("room:join", ({ code, name }, ack) => {
-    const room = getRoom(code);
-    slog(`room:join req ${code} by ${sid} name="${name}"`);
-    if (!room || room.closing) return ack?.({ ok: false, error: "Room not found" });
-    if (room.ai) return ack?.({ ok: false, error: "This room is AI only and already full" });
-    if (room.players.size >= 2) return ack?.({ ok: false, error: "Room is full" });
-
-    socket.join(code);
-    room.players.set(socket.id, { name: name?.trim() || "Player" });
-    room.status = room.players.size === 2 ? "playing" : "lobby";
-    currentRoom = code;
-    ack?.({ ok: true, code });
-    slog(`room:join ok ${code} by ${sid} now players=${room.players.size} status=${room.status}`);
-    broadcast(code, "join");
-    bumpAfk(code, "join");
-    if (room.status === "playing" && room.players.size === 2) startRound(code);
+  socket.on("room:join", ({ code, name }) => {
+    const room = rooms.get(String(code || "").trim());
+    if (!room) return socket.emit("auth:error", { text: "bad-room" });
+    room.players.push({ id: socket.id, name: name || "Player" });
+    socket.join(room.code);
+    emitUpdate(room, "join");
   });
 
-  socket.on("game:submit", async ({ word }, ack) => {
-    const code = currentRoom;
-    const room = getRoom(code);
-    slog(`game:submit ${code} by ${sid} word="${String(word)}"`);
-    if (!room || room.closing) return ack?.({ ok: false, error: "No room" });
-    if (room.status !== "playing") return ack?.({ ok: false, error: "Game is not active" });
-    if (!room.players.has(socket.id)) return ack?.({ ok: false, error: "Not in room" });
-
-    const clean = String(word || "").trim();
-    if (!clean) return ack?.({ ok: false, error: "Word cannot be empty" });
-
-    // block repeats from PREVIOUS ROUNDS only, so matching this round is allowed
-    const usedHistory = getUsedWordsFromHistory(room);
-    if (usedHistory.includes(clean.toLowerCase())) {
-      return ack?.({ ok: false, error: "That word was already used earlier in this room" });
-    }
-
-    // record the player’s submission for this round
-    room.submissions[socket.id] = clean;
-
-    bumpAfk(code, "submit");
-    ack?.({ ok: true });
-
-    // If AI room, generate bot reply now unless already present
-    if (room.ai && !room.submissions[room.botId]) {
-      await maybeMakeBotSubmission(room);
-    }
-
-    // Reveal when all submissions present
-    if (Object.keys(room.submissions).length === room.players.size) {
-      const roundNum = room.history.length + 1;
-      const pairs = Array.from(room.players.keys()).map((id) => ({
-        id,
-        name: room.players.get(id)?.name || "Player",
-        word: room.submissions[id],
-      }));
-
-      clearRoundTimer(room);
-      slog(`reveal on submit ${code} round=${roundNum}`);
-      io.to(code).emit("game:reveal", { round: roundNum, pairs });
-      room.history.push({ round: roundNum, pairs });
-
-      const unique = new Set(pairs.map((p) => p.word.toLowerCase()));
-      const allReal = pairs.every((p) => p.word && p.word.toLowerCase() !== "(no guess)");
-
-      if (allReal && unique.size === 1) {
-        room.status = "won";
-        room.winnerRound = roundNum;
-        slog(`game:win on submit ${code} round=${roundNum} word="${pairs[0].word}"`);
-        io.to(code).emit("game:win", { round: roundNum, word: pairs[0].word });
-        broadcast(code, "winOnSubmit");
-      } else {
-        broadcast(code, "postSubmit");
-        startRound(code);
+  socket.on("room:leave", () => {
+    for (const room of rooms.values()) {
+      const ix = room.players.findIndex(p => p.id === socket.id);
+      if (ix >= 0) {
+        room.players.splice(ix, 1);
+        emitUpdate(room, "leave");
+        // if host left and only AI or nobody remains, close
+        if (room.players.length <= 1) {
+          io.to(room.code).emit("room:closed", { text: "Your teammate left" });
+          rooms.delete(room.code);
+        }
+        break;
       }
+    }
+    socket.leaveAll();
+  });
+
+  socket.on("game:submit", async ({ word }) => {
+    let found = null;
+    for (const r of rooms.values()) {
+      if (r.players.some(p => p.id === socket.id) || r.players.some(p => p.id === "AI" && r.players.find(q => q.id === socket.id))) {
+        found = r; break;
+      }
+    }
+    if (!found) return;
+
+    const room = found;
+    room.lastActivity = nowMs();
+
+    // human goes first
+    if (!room.submittedHuman) {
+      room.lastHuman = String(word || "").trim() || "(no guess)";
+      room.submittedHuman = true;
+      // ask AI right after human submits
+      try {
+        const exclude = [];
+        if (room.lastHuman) exclude.push(room.lastHuman);
+        if (room.lastAI) exclude.push(room.lastAI);
+        const aiWord = await getNextWord(room.lastHuman, room.lastAI || "", exclude);
+        room.lastAI = aiWord || "(no guess)";
+        room.submittedAI = true;
+      } catch (e) {
+        console.error("[AI] error", e);
+        room.lastAI = "(no guess)";
+        room.submittedAI = true;
+      }
+      await maybeFinishRound(room);
     } else {
-      socket.to(code).emit("game:waiting", { playerId: socket.id });
+      // if somehow AI already took a turn, treat this as overwrite
+      room.lastHuman = String(word || "").trim() || "(no guess)";
+      room.submittedHuman = true;
+      await maybeFinishRound(room);
     }
   });
-
-  socket.on("game:rematch:ready", () => {
-    const code = currentRoom;
-    const room = getRoom(code);
-    slog(`rematch:ready ${code} by ${sid}`);
-    if (!room || room.closing) return;
-    if (room.status !== "won") return;
-
-    // For AI rooms, only the human needs to press ready
-    if (room.ai) {
-      room.history = [];
-      room.submissions = {};
-      room.status = "playing";
-      room.winnerRound = null;
-      room.rematchReady = new Set();
-      room.prevBot = null;
-      io.to(code).emit("game:restart");
-      broadcast(code, "restartAI");
-      startRound(code);
-      return;
-    }
-
-    // Normal 2 human room
-    if (room.players.size !== 2) return;
-    room.rematchReady.add(socket.id);
-    bumpAfk(code, "rematchReady");
-
-    if (room.rematchReady.size === 2) {
-      slog(`rematch:restart ${code}`);
-      room.history = [];
-      room.submissions = {};
-      room.status = "playing";
-      room.winnerRound = null;
-      room.rematchReady.clear();
-      io.to(code).emit("game:restart");
-      broadcast(code, "restart");
-      startRound(code);
-      return;
-    }
-    broadcast(code, "rematchWait");
-  });
-
-  function notifyPartnerAndClose(reasonText) {
-    const code = currentRoom;
-    const room = getRoom(code);
-    slog(`notifyPartnerAndClose ${code} by ${sid} reason="${reasonText}"`);
-    if (!room || room.closing) return;
-
-    room.closing = true;
-
-    const partnerId = getPartnerId(room, socket.id);
-    if (partnerId) {
-      slog(`emit partner:left:modal to partner ${partnerId.slice(-4)} in ${code}`);
-      io.to(partnerId).emit("partner:left:modal", { text: reasonText });
-    }
-
-    socket.emit("room:left");
-    socket.leave(code);
-
-    setTimeout(() => { closeRoom(code, reasonText, null); }, 0);
-    currentRoom = null;
-  }
-
-  socket.on("game:return:lobby", () => { notifyPartnerAndClose("Your teammate returned to the lobby"); });
-  socket.on("room:leave", () => { notifyPartnerAndClose("Your teammate left the room"); });
 
   socket.on("disconnect", () => {
-    const code = currentRoom;
-    const room = getRoom(code);
-    slog(`socket disconnect ${sid} room=${code}`);
-    if (!room || room.closing) return;
-
-    room.closing = true;
-    const partnerId = getPartnerId(room, socket.id);
-    if (partnerId) {
-      slog(`emit partner:left:modal due to disconnect to ${partnerId.slice(-4)} in ${code}`);
-      io.to(partnerId).emit("partner:left:modal", { text: "Your teammate disconnected" });
+    for (const room of rooms.values()) {
+      const ix = room.players.findIndex(p => p.id === socket.id);
+      if (ix >= 0) room.players.splice(ix, 1);
+      if (room.players.length <= 1) {
+        io.to(room.code).emit("room:closed", { text: "Your teammate left" });
+        rooms.delete(room.code);
+      } else {
+        emitUpdate(room, "disconnect");
+      }
     }
-    setTimeout(() => { closeRoom(code, "Your teammate disconnected", null); }, 0);
-    currentRoom = null;
   });
 });
 
-const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
+  console.log(`[server] public dir: ${PUBLIC_DIR}`);
   console.log(`[server] listening on ${PORT}`);
-  console.log(`[server] health endpoint ready at GET /healthz`);
+  console.log("[server] health endpoint ready at GET /healthz");
 });

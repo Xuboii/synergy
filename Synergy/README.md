@@ -1,5 +1,7 @@
 # Synergy game deployment files
 
+Autho: Eric Xu
+
 These files assume your server starts with `npm start` which runs `node server/index.js` and serves the `public` folder.
 
 ## Env var

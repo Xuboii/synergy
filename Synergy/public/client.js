@@ -1,433 +1,231 @@
 // public/client.js
-const DEBUG = false;
-const socket = io();
+(() => {
+  document.addEventListener("DOMContentLoaded", () => {
+    // ----- DOM -----
+    const elLobby         = document.getElementById("lobby");
+    const elGame          = document.getElementById("game");
+    const elResults       = document.getElementById("results");
 
-const $ = s => document.querySelector(s);
+    const elStatus        = document.getElementById("status");
+    const elRoomLabel     = document.getElementById("roomLabel");
+    const elRoomCodeHdr   = document.getElementById("roomCode");
+    const btnCopyHdr      = document.getElementById("copyHeaderCode");
 
-// sections
-const lobby = $("#lobby");
-const game = $("#game");
-const results = $("#results");
+    const inName          = document.getElementById("name");
+    const btnCreate       = document.getElementById("createBtn");
+    const btnCreateAI     = document.getElementById("createAIBtn");
+    const inJoinCode      = document.getElementById("joinCode");
+    const btnJoin         = document.getElementById("joinBtn");
 
-// header room
-const roomLabel = $("#roomLabel");
-const roomCodeEl = $("#roomCode");
-const copyHeaderCode = $("#copyHeaderCode");
+    const elLobbyRoom     = document.getElementById("lobbyRoom");
+    const elLobbyRoomCode = document.getElementById("lobbyRoomCode");
+    const btnCopyLobby    = document.getElementById("copyLobbyCode");
+    const btnLeaveLobby   = document.getElementById("leaveBtnLobby");
 
-// lobby controls
-const auth = {
-  name: $("#name"),
-  createBtn: $("#createBtn"),
-  createAIBtn: $("#createAIBtn"),
-  joinCode: $("#joinCode"),
-  joinBtn: $("#joinBtn"),
-  msg: $("#authMsg"),
-};
-const lobbyRoom = $("#lobbyRoom");
-const lobbyRoomCode = $("#lobbyRoomCode");
-const copyLobbyCode = $("#copyLobbyCode");
-const leaveBtnLobby = $("#leaveBtnLobby");
+    const btnLeaveGame    = document.getElementById("leaveBtn");
 
-// game controls
-const ui = {
-  status: $("#status"),
-  players: $("#players"),
-  waitMsg: $("#waitMsg"),
-  leaveBtn: $("#leaveBtn"),
-  wordForm: $("#wordForm"),
-  wordInput: $("#wordInput"),
-  resultTitle: $("#resultTitle"),
-  resultSubtitle: $("#resultSubtitle"),
-  resultsButtons: $("#resultsButtons"),
-  rematchBtn: $("#rematchBtn"),
-  backToLobbyBtn: $("#backToLobbyBtn"),
-  rematchMsg: $("#rematchMsg"),
-  historyTable: $("#historyTable"),
-  countdown: $("#countdown"),
-};
+    const elPlayers       = document.getElementById("players");
+    const elCountdown     = document.getElementById("countdown");
+    const formWord        = document.getElementById("wordForm");
+    const inWord          = document.getElementById("wordInput");
+    const elWaitMsg       = document.getElementById("waitMsg");
+    const elHistoryWrap   = document.getElementById("historyTable");
 
-// ----- debug helpers -----
-function ts() {
-  const d = new Date();
-  return d.toISOString().split("T")[1].replace("Z", "");
-}
-function clog(...a) {
-  if (!DEBUG) return;
-  console.log(`[C ${ts()}]`, ...a);
-}
+    const elResultTitle   = document.getElementById("resultTitle");
+    const elResultSubtitle= document.getElementById("resultSubtitle");
+    const elResultsBtns   = document.getElementById("resultsButtons");
+    const btnBackLobby    = document.getElementById("backToLobbyBtn");
+    const btnRematch      = document.getElementById("rematchBtn");
+    const elAuthMsg       = document.getElementById("authMsg");
 
-let currentRoom = null;
-let submittedThisRound = false;
-let myId = null;
-let playerOrder = [];
-let lastHistoryLen = 0;
-
-// terminal lock so nothing can override the modal
-let terminalScreen = null; // null | "partner-left" | "afk"
-
-// ===== timers =====
-let deadline = null;
-let tickInterval = null;
-function setCountdown(msEpoch) {
-  deadline = msEpoch;
-  if (tickInterval) clearInterval(tickInterval);
-  if (!deadline) { ui.countdown.textContent = "30"; return; }
-  const tick = () => {
-    const left = Math.max(0, Math.floor((deadline - Date.now()) / 1000));
-    ui.countdown.textContent = String(left);
-    if (left <= 0) clearInterval(tickInterval);
-  };
-  tick();
-  tickInterval = setInterval(tick, 250);
-}
-
-// ===== copy helpers =====
-function copy(text, el) {
-  navigator.clipboard.writeText(text).then(() => {
-    const span = document.createElement("span");
-    span.textContent = "Copied!";
-    span.className = "copied-indicator";
-    el.parentElement.appendChild(span);
-    setTimeout(() => { span.classList.add("fade-out"); setTimeout(() => span.remove(), 400); }, 900);
-  }).catch(() => {});
-}
-
-// ===== UI switches =====
-function hardResetInputs() {
-  auth.name.value = "";
-  auth.joinCode.value = "";
-  lobbyRoomCode.textContent = "";
-  roomCodeEl.textContent = "";
-}
-function showLobby() {
-  clog("UI showLobby");
-  lobby.classList.remove("hidden");
-  game.classList.add("hidden");
-  results.classList.add("hidden");
-  roomLabel.classList.add("hidden");
-  lobbyRoom.classList.toggle("hidden", !currentRoom);
-}
-function showGame() {
-  clog("UI showGame");
-  lobby.classList.add("hidden");
-  results.classList.add("hidden");
-  game.classList.remove("hidden");
-  roomLabel.classList.remove("hidden");
-  lobbyRoom.classList.add("hidden");
-}
-function showResults() {
-  clog("UI showResults");
-  lobby.classList.add("hidden");
-  game.classList.add("hidden");
-  results.classList.remove("hidden");
-  roomLabel.classList.add("hidden");
-  lobbyRoom.classList.add("hidden");
-}
-
-// ===== actions =====
-auth.createBtn.onclick = () => {
-  const name = auth.name.value.trim() || "Player";
-  clog("click create room name=", name);
-  socket.emit("room:create", { name }, res => {
-    clog("ack room:create", res);
-    if (!res?.ok) { auth.msg.textContent = res?.error || "Could not create room"; return; }
-    currentRoom = res.code;
-    roomCodeEl.textContent = res.code;
-    lobbyRoomCode.textContent = res.code;
-    lobbyRoom.classList.remove("hidden");
-    showLobby();
-  });
-};
-
-// Create a room that immediately pairs you with an AI
-createAIBtn.onclick = () => {
-  const name = auth.name.value.trim() || "Player";
-  clog("click create AI room name=", name);
-  socket.emit("room:create:ai", { name }, res => {
-    clog("ack room:create:ai", res);
-    if (!res?.ok) { auth.msg.textContent = res?.error || "Could not create AI room"; return; }
-    currentRoom = res.code;
-    roomCodeEl.textContent = res.code;
-    lobbyRoomCode.textContent = res.code;
-    lobbyRoom.classList.remove("hidden");
-    // The server starts the round right away for AI rooms, so we let normal room:update move the UI to Game
-  });
-};
-
-auth.joinBtn.onclick = () => {
-  const code = auth.joinCode.value.trim().toUpperCase();
-  const name = auth.name.value.trim() || "Player";
-  clog("click join room", code, name);
-  if (!code) { auth.msg.textContent = "Enter a room code"; return; }
-  socket.emit("room:join", { code, name }, res => {
-    clog("ack room:join", res);
-    if (!res?.ok) { auth.msg.textContent = res?.error || "Could not join"; return; }
-    currentRoom = res.code;
-    roomCodeEl.textContent = res.code;
-    lobbyRoomCode.textContent = res.code;
-    lobbyRoom.classList.remove("hidden");
-  });
-};
-
-leaveBtnLobby.onclick = () => {
-  clog("click leaveBtnLobby");
-  socket.emit("room:leave");
-  terminalScreen = null;
-  currentRoom = null;
-  hardResetInputs();
-  resetUI();
-  showLobby();
-};
-
-copyLobbyCode.onclick = (e) => {
-  const c = lobbyRoomCode.textContent.trim();
-  if (c) copy(c, e.currentTarget);
-};
-copyHeaderCode.onclick = (e) => {
-  const c = roomCodeEl.textContent.trim();
-  if (c) copy(c, e.currentTarget);
-};
-
-ui.leaveBtn.onclick = () => {
-  clog("click leave in game");
-  socket.emit("room:leave");
-  terminalScreen = null;
-  currentRoom = null;
-  hardResetInputs();
-  resetUI();
-  showLobby();
-};
-
-ui.wordForm.onsubmit = e => {
-  e.preventDefault();
-  if (submittedThisRound) return;
-  const word = ui.wordInput.value.trim();
-  if (!word) return;
-  clog("submit word", word);
-  socket.emit("game:submit", { word }, res => {
-    clog("ack game:submit", res);
-    if (!res?.ok) { ui.waitMsg.textContent = res?.error || "Submit failed"; return; }
-    submittedThisRound = true;
-    ui.waitMsg.textContent = "Waiting for your teammate";
-    ui.wordInput.value = "";
-  });
-};
-
-ui.rematchBtn.onclick = () => {
-  if (terminalScreen) { clog("ignore rematch during terminal"); return; }
-  clog("click rematch");
-  ui.rematchBtn.disabled = true;
-  ui.rematchMsg.textContent = "You are ready. Waiting for your teammate";
-  socket.emit("game:rematch:ready");
-};
-
-// IMPORTANT FIX: always emit when leaving from the results screen.
-// If terminalScreen is set, it means we are already on the partner-left or AFK modal,
-// so just clean up locally. Otherwise, tell the server to notify the partner and close the room.
-ui.backToLobbyBtn.onclick = () => {
-  clog("click backToLobbyBtn, terminalScreen=", terminalScreen, "currentRoom=", currentRoom);
-  if (!terminalScreen && currentRoom) {
-    clog("emit game:return:lobby");
-    socket.emit("game:return:lobby");
-    // The server will emit partner:left:modal to the other player and room:left to us.
-    return;
-  }
-  // Terminal modal case, or no room
-  terminalScreen = null;
-  currentRoom = null;
-  hardResetInputs();
-  resetUI();
-  showLobby();
-  attachCoreListeners(); // rebind after terminal state
-};
-
-socket.on("connect", () => { myId = socket.id; clog("socket connect", myId); });
-
-// ===== rendering =====
-function renderPlayers(list) {
-  ui.players.innerHTML = "";
-  list.forEach(p => {
-    const li = document.createElement("li");
-    li.textContent = p.name;
-    ui.players.appendChild(li);
-  });
-}
-function renderStatus(status) {
-  ui.status.textContent = status === "playing" ? "In Game" : status;
-}
-function computePlayerOrder(snap) {
-  if (snap.players.length >= 1) playerOrder = snap.players.map(p => p.id).slice(0, 2);
-  else playerOrder = [];
-}
-function renderHistoryTable(snap) {
-  computePlayerOrder(snap);
-  const [id1, id2] = playerOrder;
-  const p1 = snap.players.find(p => p.id === id1);
-  const p2 = snap.players.find(p => p.id === id2);
-  const name1 = p1?.name || "Player 1";
-  const name2 = p2?.name || "Player 2";
-  let html = `
-    <table class="table">
-      <thead><tr><th>Round</th><th>${name1}</th><th>${name2}</th></tr></thead>
-      <tbody>`;
-  snap.history.forEach(r => {
-    const byId = {}; r.pairs.forEach(p => { byId[p.id] = p.word; });
-    const w1 = id1 ? (byId[id1] ?? "") : "";
-    const w2 = id2 ? (byId[id2] ?? "") : "";
-    html += `<tr>
-      <td class="col-round">${r.round}</td>
-      <td class="col-word"><span class="tag">${name1}</span><span class="guess">${w1}</span></td>
-      <td class="col-word"><span class="tag">${name2}</span><span class="guess">${w2}</span></td>
-    </tr>`;
-  });
-  html += `</tbody></table>`;
-  ui.historyTable.innerHTML = html;
-}
-
-// ===== named handlers so we can detach on terminal =====
-function onRoomUpdate(snap) {
-  if (terminalScreen) { clog("room:update ignored due to terminal"); return; }
-
-  clog("room:update status=", snap.status, "players=", snap.players.length, "code=", snap.code);
-
-  if (snap.status === "playing") showGame();
-  else if (snap.status === "won") showResults();
-  else showLobby();
-
-  renderPlayers(snap.players);
-  renderStatus(snap.status);
-
-  if (snap.status === "playing") {
-    roomCodeEl.textContent = snap.code;
-    roomLabel.classList.remove("hidden");
-  }
-  if (!currentRoom) currentRoom = snap.code;
-  lobbyRoomCode.textContent = currentRoom || "";
-  if (currentRoom && snap.status !== "playing" && snap.status !== "won") {
-    lobbyRoom.classList.remove("hidden");
-  }
-
-  renderHistoryTable(snap);
-
-  if (snap.history.length !== lastHistoryLen) {
-    submittedThisRound = false;
-    ui.waitMsg.textContent = "";
-    lastHistoryLen = snap.history.length;
-  }
-
-  if (snap.deadline) setCountdown(snap.deadline);
-
-  if (snap.status === "won") {
-    const ready = new Set(snap.rematchReady || []);
-    const myReady = ready.has(myId);
-    if (ready.size === 0) { ui.rematchBtn.disabled = false; ui.rematchMsg.textContent = ""; }
-    else if (ready.size === 1) {
-      ui.rematchBtn.disabled = myReady;
-      ui.rematchMsg.textContent = myReady ? "You are ready. Waiting for your teammate" : "Your teammate is ready";
-    } else {
-      ui.rematchBtn.disabled = true;
-      ui.rematchMsg.textContent = "Both ready. Restarting";
+    const req = [
+      elLobby, elGame, elResults, elStatus, elRoomLabel, elRoomCodeHdr, btnCopyHdr,
+      inName, btnCreate, btnCreateAI, inJoinCode, btnJoin, elLobbyRoom,
+      elLobbyRoomCode, btnCopyLobby, btnLeaveLobby, btnLeaveGame,
+      elPlayers, elCountdown, formWord, inWord, elWaitMsg, elHistoryWrap,
+      elResultTitle, elResultSubtitle, elResultsBtns, btnBackLobby, btnRematch
+    ];
+    if (req.some(x => !x)) {
+      console.error("[client] Missing DOM nodes. Check IDs in index.html");
+      return;
     }
-  }
-}
 
-function onGameRound({ deadline }) { clog("game:round deadline set"); setCountdown(deadline); }
+    // ----- helpers -----
+    const setText = (el, t) => (el.textContent = t ?? "");
+    const show = el => el.classList.remove("hidden");
+    const hide = el => el.classList.add("hidden");
 
-function onGameWin({ round, word }) {
-  if (terminalScreen) { clog("game:win ignored due to terminal"); return; }
-  clog("game:win round=", round, "word=", word);
-  ui.resultTitle.textContent = `You matched on round ${round}`;
-  ui.resultSubtitle.textContent = `Winning word: "${word}"`;
-  ui.resultsButtons.classList.remove("hidden");
-  ui.rematchBtn.classList.remove("hidden");
-  ui.backToLobbyBtn.classList.remove("hidden");
-  showResults();
-}
+    function viewLobby()   { show(elLobby); hide(elGame); hide(elResults); }
+    function viewGame()    { hide(elLobby); show(elGame); hide(elResults); }
+    function viewResults() { hide(elLobby); hide(elGame); show(elResults); }
 
-function onGameRestart() {
-  if (terminalScreen) { clog("game:restart ignored due to terminal"); return; }
-  clog("game:restart showGame");
-  ui.waitMsg.textContent = "";
-  submittedThisRound = false;
-  ui.rematchBtn.disabled = false;
-  ui.rematchMsg.textContent = "";
-  lastHistoryLen = 0;
-  setCountdown(null);
-  showGame();
-}
+    let currentRoom = null;
+    let submitLocked = false;
+    let timerId = null;
+    function startTimer(deadlineMs) {
+      if (timerId) clearInterval(timerId);
+      const tick = () => {
+        const left = Math.max(0, Math.floor((deadlineMs - Date.now()) / 1000));
+        setText(elCountdown, left);
+      };
+      tick();
+      timerId = setInterval(tick, 250);
+    }
 
-function enterTerminalScreen(type, title, subtitle) {
-  terminalScreen = type;
-  clog("enterTerminalScreen", type, "title=", title, "subtitle=", subtitle);
+    function setRoomCode(code) {
+      currentRoom = code || null;
+      if (currentRoom) {
+        setText(elRoomCodeHdr, currentRoom);
+        setText(elLobbyRoomCode, currentRoom);
+        show(elRoomLabel);
+        show(elLobbyRoom);
+      } else {
+        setText(elRoomCodeHdr, "");
+        setText(elLobbyRoomCode, "------");
+        hide(elRoomLabel);
+        hide(elLobbyRoom);
+      }
+    }
 
-  socket.off("room:update", onRoomUpdate);
-  socket.off("game:restart", onGameRestart);
-  socket.off("game:win", onGameWin);
-  socket.off("game:round", onGameRound);
+    function lockSubmit(lock, msg = "") {
+      submitLocked = !!lock;
+      inWord.disabled = submitLocked;
+      const btn = formWord.querySelector("button[type=submit]");
+      if (btn) btn.disabled = submitLocked;
+      setText(elWaitMsg, msg);
+    }
 
-  ui.rematchBtn.disabled = true;
-  ui.wordForm.onsubmit = e => e.preventDefault();
+    function renderPlayers(players) {
+      elPlayers.innerHTML = "";
+      (players || []).forEach(p => {
+        const li = document.createElement("li");
+        li.textContent = p?.name || "Player";
+        elPlayers.appendChild(li);
+      });
+    }
 
-  ui.resultTitle.textContent = title;
-  ui.resultSubtitle.textContent = subtitle || "";
-  ui.resultsButtons.classList.remove("hidden");
-  ui.rematchBtn.classList.add("hidden");
-  ui.backToLobbyBtn.classList.remove("hidden");
-  ui.rematchMsg.textContent = "";
-  showResults();
-}
+    function renderHistory(history) {
+      elHistoryWrap.innerHTML = "";
+      const table = document.createElement("table");
+      // use the CSS class that actually has styles
+      table.className = "table";
+      table.innerHTML = "<thead><tr><th>Round</th><th>Player</th><th>AI</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      (history || []).forEach(r => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td class="col-round">${r.round ?? ""}</td><td class="col-word">${r.human ?? ""}</td><td class="col-word">${r.ai ?? ""}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      elHistoryWrap.appendChild(table);
+    }
 
-function onPartnerLeftModal({ text }) {
-  clog("partner:left:modal received text=", text);
-  enterTerminalScreen("partner-left", "Your teammate left", text || "Room closed");
-}
+    function copyCode() {
+      if (!currentRoom || !navigator.clipboard) return;
+      navigator.clipboard.writeText(currentRoom).catch(() => {});
+      // small “copied” feedback near the header code
+      const span = document.createElement("span");
+      span.className = "copied-indicator";
+      span.textContent = "Copied";
+      btnCopyHdr.after(span);
+      setTimeout(() => span.classList.add("fade-out"), 500);
+      setTimeout(() => span.remove(), 900);
+    }
 
-function onRoomClosed({ text, reason }) {
-  clog("room:closed received reason=", reason, "text=", text, "terminalScreen=", terminalScreen);
-  if (terminalScreen) return;
-  if (reason === "afk") {
-    enterTerminalScreen("afk", "Inactive too long", "You have been inactive for too long");
-    return;
-  }
-  enterTerminalScreen("partner-left", "Your teammate left", text || "Room closed");
-}
+    btnCopyHdr.addEventListener("click", copyCode);
+    btnCopyLobby.addEventListener("click", copyCode);
 
-// attach once at load, and reattach after leaving terminal
-function attachCoreListeners() {
-  clog("attachCoreListeners");
-  socket.off("room:update");   socket.on("room:update", onRoomUpdate);
-  socket.off("game:round");    socket.on("game:round", onGameRound);
-  socket.off("game:win");      socket.on("game:win", onGameWin);
-  socket.off("game:restart");  socket.on("game:restart", onGameRestart);
-  socket.off("partner:left:modal"); socket.on("partner:left:modal", onPartnerLeftModal);
-  socket.off("room:closed");   socket.on("room:closed", onRoomClosed);
-  socket.off("partner:left");  socket.on("partner:left", ({ text }) => onPartnerLeftModal({ text }));
-}
-attachCoreListeners();
+    // ----- socket -----
+    const socket = io();
 
-socket.on("room:left", () => {
-  clog("room:left self cleanup");
-  terminalScreen = null;
-  currentRoom = null;
-  hardResetInputs();
-  resetUI();
-  showLobby();
-  attachCoreListeners();
-});
+    socket.on("room:update", payload => {
+      // entering a room moves to Game view
+      viewGame();
 
-socket.on("room:notice", ({ text }) => { ui.waitMsg.textContent = text; });
+      if (payload.code) setRoomCode(payload.code);
+      if (payload.status) setText(elStatus, payload.status);
+      if (payload.players) renderPlayers(payload.players);
+      if (payload.history) renderHistory(payload.history);
+      if (payload.deadline) startTimer(payload.deadline);
 
-function resetUI() {
-  clog("resetUI");
-  ui.players.innerHTML = "";
-  ui.waitMsg.textContent = "";
-  ui.rematchMsg.textContent = "";
-  ui.rematchBtn.disabled = false;
-  submittedThisRound = false;
-  roomCodeEl.textContent = "";
-  lobbyRoom.classList.add("hidden");
-  playerOrder = [];
-  lastHistoryLen = 0;
-  ui.historyTable.innerHTML = "";
-  setCountdown(null);
-}
+      // after certain tags, unlock input
+      const tag = payload.tag || "";
+      if (["postSubmit", "roundStart", "join", "createAI"].includes(tag)) {
+        lockSubmit(false, "");
+      }
+      setText(elAuthMsg, "");
+    });
+
+    socket.on("room:closed", info => {
+      // Show a simple results screen with a single “Return to lobby”
+      setText(elResultTitle, "Room closed");
+      setText(elResultSubtitle, info?.text || "");
+      hide(btnRematch);
+      show(btnBackLobby);
+      viewResults();
+      if (timerId) clearInterval(timerId);
+      setRoomCode(null);
+      lockSubmit(true, info?.text || "Room closed");
+    });
+
+    socket.on("auth:error", info => {
+      setText(elAuthMsg, info?.text === "bad-room" ? "Room not found" : "Unable to join");
+    });
+
+    // ----- lobby actions -----
+    btnCreate.addEventListener("click", () => {
+      const name = (inName.value || "").trim();
+      socket.emit("room:create", { name });
+    });
+
+    btnCreateAI.addEventListener("click", () => {
+      const name = (inName.value || "").trim();
+      socket.emit("room:create:ai", { name });
+    });
+
+    btnJoin.addEventListener("click", () => {
+      const code = (inJoinCode.value || "").trim();
+      const name = (inName.value || "").trim();
+      if (!code) return setText(elAuthMsg, "Enter a code to join");
+      socket.emit("room:join", { code, name });
+    });
+
+    btnLeaveLobby.addEventListener("click", () => {
+      socket.emit("room:leave");
+      setRoomCode(null);
+      viewLobby();
+    });
+
+    btnLeaveGame.addEventListener("click", () => {
+      socket.emit("room:leave");
+      setRoomCode(null);
+      viewLobby();
+    });
+
+    btnBackLobby.addEventListener("click", () => {
+      setRoomCode(null);
+      viewLobby();
+    });
+
+    // no rematch flow on server yet, so hide button behavior
+    btnRematch.addEventListener("click", () => {
+      // could emit a custom event in the future
+      setRoomCode(null);
+      viewLobby();
+    });
+
+    // ----- word submit -----
+    formWord.addEventListener("submit", e => {
+      e.preventDefault();
+      if (submitLocked) return;
+      const w = (inWord.value || "").trim();
+      if (!w) return;
+      socket.emit("game:submit", { word: w });
+      inWord.value = "";
+      lockSubmit(true, "Waiting for teammate…");
+    });
+
+    // start at lobby
+    viewLobby();
+  });
+})();
