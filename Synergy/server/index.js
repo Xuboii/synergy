@@ -1,4 +1,5 @@
 // server/index.js (ESM)
+// Run with: node index.js
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -21,9 +22,10 @@ const AFK_CLOSE_SECONDS = 70;
 app.use(express.static(PUBLIC_DIR));
 app.get("/healthz", (_, res) => res.json({ ok: true }));
 
-// ------------ rooms ------------
+// ---------- rooms ----------
 const rooms = new Map();
 const nowMs = () => Date.now();
+const norm = s => String(s || "").trim().toLowerCase();
 
 function makeCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnopqrstuvwxyz";
@@ -41,18 +43,22 @@ function makeRoom() {
     round: 0,
     deadline: 0,
     players: [],              // [{id, name}]
-    history: [],              // [{round, human, ai}]  slotA, slotB
+    history: [],              // [{round, human, ai}]  slots A,B
+    // current round state
     lastHuman: "",
     lastAI: "",
     submittedHuman: false,
     submittedAI: false,
     roundClosed: false,
+    // previous valid pair (both were real, not "(no guess)")
     prevHuman: "",
     prevAI: "",
+    // timers
     lastActivity: nowMs(),
     afkTimer: null,
     roundTimer: null,
-    win: null,                // {round, word}
+    // finish state
+    win: null,                // { round, word }
     rematchVotes: new Set(),
   };
   rooms.set(code, room);
@@ -89,6 +95,7 @@ function emitUpdate(room, tag = "") {
 function startRound(room) {
   room.round = room.history.length + 1;
   room.deadline = nowMs() + ROUND_SECONDS * 1000;
+
   room.submittedHuman = false;
   room.submittedAI = false;
   room.roundClosed = false;
@@ -98,7 +105,6 @@ function startRound(room) {
   if (room.roundTimer) clearTimeout(room.roundTimer);
   room.roundTimer = setTimeout(() => {
     if (room.roundClosed) return;
-    // do not fabricate AI guesses in human rooms
     if (!room.submittedHuman) { room.lastHuman = "(no guess)"; room.submittedHuman = true; }
     if (!room.submittedAI)   { room.lastAI   = "(no guess)";  room.submittedAI   = true; }
     maybeFinishRound(room);
@@ -110,12 +116,18 @@ function startRound(room) {
 function wordsUsedSoFar(room) {
   const ex = new Set();
   for (const h of room.history) {
-    if (h.human && h.human !== "(no guess)") ex.add(h.human);
-    if (h.ai && h.ai !== "(no guess)") ex.add(h.ai);
+    if (h.human && h.human !== "(no guess)") ex.add(norm(h.human));
+    if (h.ai && h.ai !== "(no guess)") ex.add(norm(h.ai));
   }
-  if (room.prevHuman && room.prevHuman !== "(no guess)") ex.add(room.prevHuman);
-  if (room.prevAI && room.prevAI !== "(no guess)") ex.add(room.prevAI);
+  if (room.prevHuman && room.prevHuman !== "(no guess)") ex.add(norm(room.prevHuman));
+  if (room.prevAI && room.prevAI !== "(no guess)") ex.add(norm(room.prevAI));
   return Array.from(ex);
+}
+
+function wordAlreadyUsed(room, w) {
+  if (!w) return false;
+  const used = wordsUsedSoFar(room);
+  return used.includes(norm(w));
 }
 
 async function maybeFinishRound(room) {
@@ -148,18 +160,20 @@ async function maybeFinishRound(room) {
   setTimeout(() => startRound(room), 400);
 }
 
-// ------------ sockets ------------
+// ---------- sockets ----------
 io.on("connection", socket => {
   const setActive = room => { room.lastActivity = nowMs(); refreshAfkTimer(room); };
 
+  // Create Room: human mode, wait for teammate
   socket.on("room:create", ({ name }) => {
-    const room = makeRoom();           // mode stays "human"
+    const room = makeRoom(); // mode stays "human"
     room.players.push({ id: socket.id, name: name || "Player" });
     socket.join(room.code);
     setActive(room);
-    emitUpdate(room, "created");       // wait for joiner
+    emitUpdate(room, "created");
   });
 
+  // Play with AI: start immediately
   socket.on("room:create:ai", ({ name }) => {
     const room = makeRoom();
     room.mode = "ai";
@@ -172,6 +186,7 @@ io.on("connection", socket => {
     startRound(room);
   });
 
+  // Join by code
   socket.on("room:join", ({ code, name }) => {
     const room = rooms.get(String(code || "").trim());
     if (!room) return socket.emit("auth:error", { text: "bad-room" });
@@ -188,12 +203,14 @@ io.on("connection", socket => {
     }
   });
 
+  // Leave from lobby or game. Only notify others.
   socket.on("room:leave", () => {
     for (const room of rooms.values()) {
       const ix = room.players.findIndex(p => p.id === socket.id);
       if (ix >= 0) {
         room.players.splice(ix, 1);
-        io.to(room.code).emit("room:closed", { text: "Your teammate left" });
+        socket.to(room.code).emit("room:closed", { text: "Your teammate left" });
+        if (room.roundTimer) clearTimeout(room.roundTimer);
         rooms.delete(room.code);
         break;
       }
@@ -201,22 +218,30 @@ io.on("connection", socket => {
     socket.leaveAll();
   });
 
+  // Submit word
   socket.on("game:submit", async ({ word }) => {
     let room = null;
     for (const r of rooms.values()) {
       if (r.players.some(p => p.id === socket.id)) { room = r; break; }
     }
     if (!room) return;
-
     if (room.roundClosed || room.status !== "playing") return;
+
     setActive(room);
 
     const clean = String(word || "").trim() || "(no guess)";
+
+    // Block repeats that were used in earlier rounds
+    if (clean !== "(no guess)" && wordAlreadyUsed(room, clean)) {
+      socket.emit("game:error", { text: "That word was already used in a previous round." });
+      return;
+    }
+
     const aId = room.players[0]?.id;
     const bId = room.players[1]?.id;
 
+    // Human mode: record both humans, never call AI
     if (room.mode === "human") {
-      // never call AI here
       if (socket.id === aId && !room.submittedHuman) {
         room.lastHuman = clean;
         room.submittedHuman = true;
@@ -228,13 +253,13 @@ io.on("connection", socket => {
       return;
     }
 
-    // AI mode requires the second slot really is "AI"
+    // AI mode: human in slot A submits, server fills slot B if it is truly AI
     if (room.mode === "ai" && bId === "AI" && socket.id === aId && !room.submittedHuman) {
       room.lastHuman = clean;
       room.submittedHuman = true;
 
       try {
-        const exclude = wordsUsedSoFar(room);
+        const exclude = wordsUsedSoFar(room); // excludes only earlier rounds
         const prevH = room.prevHuman || "";
         const prevA = room.prevAI || "";
         const aiWord = await getNextWord(prevH, prevA, exclude);
@@ -249,9 +274,10 @@ io.on("connection", socket => {
       return;
     }
 
-    // ignore any other submits that would impersonate the AI slot
+    // ignore anything else
   });
 
+  // Rematch request
   socket.on("rematch:request", () => {
     let found = null;
     for (const r of rooms.values()) {
@@ -261,9 +287,8 @@ io.on("connection", socket => {
 
     const room = found;
     room.rematchVotes.add(socket.id);
-    if (room.mode === "ai") {
-      room.rematchVotes.add("AI");
-    }
+    if (room.mode === "ai") room.rematchVotes.add("AI");
+
     io.to(room.code).emit("rematch:status", {
       readyCount: room.rematchVotes.size,
       total: room.players.length,
@@ -289,12 +314,14 @@ io.on("connection", socket => {
     }
   });
 
+  // Leave from results screen
   socket.on("rematch:leave", () => {
     for (const room of rooms.values()) {
       const ix = room.players.findIndex(p => p.id === socket.id);
       if (ix >= 0) {
         room.players.splice(ix, 1);
-        io.to(room.code).emit("room:closed", { text: "Your teammate left" });
+        socket.to(room.code).emit("room:closed", { text: "Your teammate left" });
+        if (room.roundTimer) clearTimeout(room.roundTimer);
         rooms.delete(room.code);
         break;
       }
@@ -302,6 +329,7 @@ io.on("connection", socket => {
     socket.leaveAll();
   });
 
+  // Disconnect
   socket.on("disconnect", () => {
     for (const room of rooms.values()) {
       const ix = room.players.findIndex(p => p.id === socket.id);

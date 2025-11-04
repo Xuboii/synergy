@@ -13,7 +13,7 @@
 
     const inName          = document.getElementById("name");
     const btnCreate       = document.getElementById("createBtn");
-    const btnCreateAI     = document.getElementById("createAIBtn"); // text: Play with AI
+    const btnCreateAI     = document.getElementById("createAIBtn"); // "Play with AI"
     const inJoinCode      = document.getElementById("joinCode");
     const btnJoin         = document.getElementById("joinBtn");
 
@@ -194,6 +194,15 @@
       if (timerId) clearInterval(timerId);
       showResults("Room closed", info?.text || "", false);
       setRoomCode(null);
+    });
+
+    // show duplicate word error and unlock input
+    socket.on("game:error", ({ text }) => {
+      setText(elWaitMsg, text || "Invalid word");
+      lockSubmit(false, elWaitMsg.textContent);
+      setTimeout(() => {
+        if (elWaitMsg.textContent === text) setText(elWaitMsg, "");
+      }, 2000);
     });
 
     // ---------- lobby actions ----------
