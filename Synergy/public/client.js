@@ -1,7 +1,7 @@
 // public/client.js
 (() => {
   document.addEventListener("DOMContentLoaded", () => {
-    // ----- DOM -----
+    // ---------- DOM ----------
     const elLobby         = document.getElementById("lobby");
     const elGame          = document.getElementById("game");
     const elResults       = document.getElementById("results");
@@ -13,7 +13,7 @@
 
     const inName          = document.getElementById("name");
     const btnCreate       = document.getElementById("createBtn");
-    const btnCreateAI     = document.getElementById("createAIBtn");
+    const btnCreateAI     = document.getElementById("createAIBtn"); // text: Play with AI
     const inJoinCode      = document.getElementById("joinCode");
     const btnJoin         = document.getElementById("joinBtn");
 
@@ -33,9 +33,9 @@
 
     const elResultTitle   = document.getElementById("resultTitle");
     const elResultSubtitle= document.getElementById("resultSubtitle");
-    const elResultsBtns   = document.getElementById("resultsButtons");
     const btnBackLobby    = document.getElementById("backToLobbyBtn");
     const btnRematch      = document.getElementById("rematchBtn");
+    const elRematchMsg    = document.getElementById("rematchMsg");
     const elAuthMsg       = document.getElementById("authMsg");
 
     const req = [
@@ -43,14 +43,14 @@
       inName, btnCreate, btnCreateAI, inJoinCode, btnJoin, elLobbyRoom,
       elLobbyRoomCode, btnCopyLobby, btnLeaveLobby, btnLeaveGame,
       elPlayers, elCountdown, formWord, inWord, elWaitMsg, elHistoryWrap,
-      elResultTitle, elResultSubtitle, elResultsBtns, btnBackLobby, btnRematch
+      elResultTitle, elResultSubtitle, btnBackLobby, btnRematch
     ];
     if (req.some(x => !x)) {
       console.error("[client] Missing DOM nodes. Check IDs in index.html");
       return;
     }
 
-    // ----- helpers -----
+    // ---------- helpers ----------
     const setText = (el, t) => (el.textContent = t ?? "");
     const show = el => el.classList.remove("hidden");
     const hide = el => el.classList.add("hidden");
@@ -59,14 +59,24 @@
     function viewGame()    { hide(elLobby); show(elGame); hide(elResults); }
     function viewResults() { hide(elLobby); hide(elGame); show(elResults); }
 
+    function showResults(title, subtitle, showRematch = true) {
+      setText(elResultTitle, title || "Room closed");
+      setText(elResultSubtitle, subtitle || "");
+      setText(elRematchMsg, "");
+      viewResults();
+      btnRematch.style.display = showRematch ? "" : "none";
+    }
+
     let currentRoom = null;
     let submitLocked = false;
     let timerId = null;
+    let playerNames = ["Player A", "Player B"];
+
     function startTimer(deadlineMs) {
       if (timerId) clearInterval(timerId);
       const tick = () => {
         const left = Math.max(0, Math.floor((deadlineMs - Date.now()) / 1000));
-        setText(elCountdown, left);
+        elCountdown.textContent = `${left}s left`;
       };
       tick();
       timerId = setInterval(tick, 250);
@@ -107,13 +117,18 @@
     function renderHistory(history) {
       elHistoryWrap.innerHTML = "";
       const table = document.createElement("table");
-      // use the CSS class that actually has styles
       table.className = "table";
-      table.innerHTML = "<thead><tr><th>Round</th><th>Player</th><th>AI</th></tr></thead>";
+      const [nameA, nameB] = playerNames;
+      table.innerHTML = `<thead>
+        <tr><th>Round</th><th>${nameA}</th><th>${nameB}</th></tr>
+      </thead>`;
       const tbody = document.createElement("tbody");
       (history || []).forEach(r => {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="col-round">${r.round ?? ""}</td><td class="col-word">${r.human ?? ""}</td><td class="col-word">${r.ai ?? ""}</td>`;
+        tr.innerHTML = `
+          <td class="col-round">${r.round ?? ""}</td>
+          <td class="col-word">${r.human ?? ""}</td>
+          <td class="col-word">${r.ai ?? ""}</td>`;
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
@@ -123,56 +138,65 @@
     function copyCode() {
       if (!currentRoom || !navigator.clipboard) return;
       navigator.clipboard.writeText(currentRoom).catch(() => {});
-      // small “copied” feedback near the header code
-      const span = document.createElement("span");
-      span.className = "copied-indicator";
-      span.textContent = "Copied";
-      btnCopyHdr.after(span);
-      setTimeout(() => span.classList.add("fade-out"), 500);
-      setTimeout(() => span.remove(), 900);
     }
 
     btnCopyHdr.addEventListener("click", copyCode);
     btnCopyLobby.addEventListener("click", copyCode);
 
-    // ----- socket -----
+    // ---------- socket ----------
     const socket = io();
 
     socket.on("room:update", payload => {
-      // entering a room moves to Game view
       viewGame();
 
       if (payload.code) setRoomCode(payload.code);
       if (payload.status) setText(elStatus, payload.status);
-      if (payload.players) renderPlayers(payload.players);
+      if (payload.players) {
+        renderPlayers(payload.players);
+        const a = payload.players[0]?.name || "Player A";
+        const b = payload.players[1]?.name || "Player B";
+        playerNames = [a, b];
+      }
       if (payload.history) renderHistory(payload.history);
-      if (payload.deadline) startTimer(payload.deadline);
 
-      // after certain tags, unlock input
+      if (payload.status === "waiting") {
+        hide(elCountdown);
+        lockSubmit(true, "Waiting for teammate…");
+      } else {
+        show(elCountdown);
+        if (payload.deadline) startTimer(payload.deadline);
+      }
+
       const tag = payload.tag || "";
-      if (["postSubmit", "roundStart", "join", "createAI"].includes(tag)) {
-        lockSubmit(false, "");
+      if (["postSubmit", "roundStart", "join", "createAI", "rematchBegin"].includes(tag)) {
+        if (payload.status === "playing") lockSubmit(false, "");
       }
       setText(elAuthMsg, "");
     });
 
-    socket.on("room:closed", info => {
-      // Show a simple results screen with a single “Return to lobby”
-      setText(elResultTitle, "Room closed");
-      setText(elResultSubtitle, info?.text || "");
-      hide(btnRematch);
-      show(btnBackLobby);
-      viewResults();
+    socket.on("game:win", ({ round, word }) => {
+      lockSubmit(true, "");
       if (timerId) clearInterval(timerId);
-      setRoomCode(null);
+      showResults("Room closed", `You matched on round ${round} with "${word}".`, true);
+    });
+
+    socket.on("rematch:status", ({ readyCount, total }) => {
+      setText(elRematchMsg, `Rematch ready: ${readyCount}/${total}`);
+    });
+
+    socket.on("rematch:begin", () => {
+      setText(elRematchMsg, "");
+      viewGame();
+    });
+
+    socket.on("room:closed", info => {
       lockSubmit(true, info?.text || "Room closed");
+      if (timerId) clearInterval(timerId);
+      showResults("Room closed", info?.text || "", false);
+      setRoomCode(null);
     });
 
-    socket.on("auth:error", info => {
-      setText(elAuthMsg, info?.text === "bad-room" ? "Room not found" : "Unable to join");
-    });
-
-    // ----- lobby actions -----
+    // ---------- lobby actions ----------
     btnCreate.addEventListener("click", () => {
       const name = (inName.value || "").trim();
       socket.emit("room:create", { name });
@@ -203,18 +227,17 @@
     });
 
     btnBackLobby.addEventListener("click", () => {
+      socket.emit("rematch:leave");
       setRoomCode(null);
       viewLobby();
     });
 
-    // no rematch flow on server yet, so hide button behavior
     btnRematch.addEventListener("click", () => {
-      // could emit a custom event in the future
-      setRoomCode(null);
-      viewLobby();
+      socket.emit("rematch:request");
+      setText(elRematchMsg, "Waiting for your teammate…");
     });
 
-    // ----- word submit -----
+    // ---------- word submit ----------
     formWord.addEventListener("submit", e => {
       e.preventDefault();
       if (submitLocked) return;
