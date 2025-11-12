@@ -205,3 +205,21 @@ h2, h3 { margin: 6px 0 10px 0; }
   from { opacity: 1; }
   to { opacity: 0.4; }
 }
+
+.footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #aaa;
+  padding: 8px 0;
+  background: rgba(10, 10, 20, 0.4);
+  backdrop-filter: blur(6px);
+  z-index: 100;
+}
+.footer p {
+  margin: 0;
+}
+
