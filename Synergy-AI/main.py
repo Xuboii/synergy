@@ -177,6 +177,9 @@ class NextWordReq(BaseModel):
                 seen.add(w)
                 deduped.append(w)
         return deduped
+@app.get("/")
+async def root():
+    return {"ok": True, "model": OPENAI_MODEL, "service": "synergy-ai"}
 
 @app.get("/healthz")
 async def healthz():
