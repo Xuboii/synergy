@@ -75,8 +75,9 @@
     function resetRoundUI() {
       if (timerId) clearInterval(timerId);
       setText(elCountdown, "30s left");
+      setText(elWaitMsg, "");                // clear message
       show(elCountdown);
-      lockSubmit(false, "");
+      // keep input disabled until playing
     }
 
     // Only start ticking when server sends a deadline
@@ -156,14 +157,11 @@
 
     // Countdown banner
     socket.on("game:countdown", ({ seconds }) => {
-      if (!elStatus) return;
-
+      setText(elWaitMsg, "");                // ensure no "waiting..." text
       elStatus.style.color = "#ffcc00";
       elStatus.style.fontWeight = "600";
-
       if (seconds >= 0) {
         elStatus.textContent = `Game starts in ${seconds}...`;
-        // show a static 30s so players see the round limit, but no ticking yet
         setText(elCountdown, "30s left");
       } else {
         elStatus.textContent = "Go!";
@@ -173,6 +171,7 @@
         }, 500);
       }
     });
+
 
     socket.on("room:update", payload => {
       viewGame();
@@ -184,14 +183,17 @@
           case "waiting":
             elStatus.textContent = "Waiting for teammate…";
             elStatus.style.color = "#8888ff";
+            lockSubmit(true, "");
             break;
           case "countdown":
             elStatus.textContent = "Game starting soon…";
             elStatus.style.color = "#ffcc00";
+            lockSubmit(true, "");
             break;
           case "playing":
             elStatus.textContent = "Playing";
             elStatus.style.color = "#00ff88";
+            lockSubmit(false, "");
             break;
           default:
             elStatus.textContent = payload.status;
@@ -202,8 +204,11 @@
       if (payload.status === "waiting" || payload.status === "countdown") {
         if (timerId) clearInterval(timerId);
         setText(elCountdown, "30s left");
+        setText(elWaitMsg, "");
+      } else if (payload.status === "playing" && payload.deadline) {
+        startTimer(payload.deadline);
       }
-      
+
       if (payload.players) {
         renderPlayers(payload.players);
         const a = payload.players[0]?.name || "Player A";
@@ -211,15 +216,6 @@
         playerNames = [a, b];
       }
       if (payload.history) renderHistory(payload.history);
-
-      if (payload.status === "waiting") {
-        hide(elCountdown);
-        lockSubmit(true, "Waiting for teammate…");
-      } else {
-        show(elCountdown);
-        // Only start the ticking timer once we are actually playing
-        if (payload.status === "playing" && payload.deadline) startTimer(payload.deadline);
-      }
 
       const tag = payload.tag || "";
       if (["postSubmit", "roundStart", "join", "createAI", "rematchBegin"].includes(tag)) {
@@ -318,7 +314,7 @@
       if (!w) return;
       socket.emit("game:submit", { word: w });
       inWord.value = "";
-      lockSubmit(true, "Waiting for teammate…");
+      lockSubmit(true, "Waiting for teammate…"); // only here we show the text
     });
 
     // start at lobby
