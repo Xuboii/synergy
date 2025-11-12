@@ -204,19 +204,30 @@ io.on("connection", socket => {
   });
 
   // Leave from lobby or game. Only notify others.
-  socket.on("room:leave", () => {
-    for (const room of rooms.values()) {
-      const ix = room.players.findIndex(p => p.id === socket.id);
-      if (ix >= 0) {
-        room.players.splice(ix, 1);
+ socket.on("room:leave", () => {
+  for (const room of rooms.values()) {
+    const ix = room.players.findIndex(p => p.id === socket.id);
+    if (ix >= 0) {
+      room.players.splice(ix, 1);
+
+      // If it’s a human-vs-human lobby, notify teammate.
+      if (room.mode === "human") {
         socket.to(room.code).emit("room:closed", { text: "Your teammate left" });
-        if (room.roundTimer) clearTimeout(room.roundTimer);
-        rooms.delete(room.code);
-        break;
       }
+
+      // Clean up memory regardless of mode
+      if (room.roundTimer) clearTimeout(room.roundTimer);
+      if (room.afkTimer) clearTimeout(room.afkTimer);
+      rooms.delete(room.code);
+      break;
     }
-    socket.leaveAll();
+  }
+  socket.leaveAll();
+
+  // Tell the leaving client to reset cleanly
+  socket.emit("room:closed", { text: "Returned to lobby" });
   });
+
 
   // Submit word
   socket.on("game:submit", async ({ word }) => {
