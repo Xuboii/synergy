@@ -1,0 +1,14 @@
+{
+  "name": "synergy-game-server",
+  "version": "1.0.0",
+  "description": "Synergy multiplayer game server (Node + Socket.io + Express)",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.8.1"
+  }
+}
