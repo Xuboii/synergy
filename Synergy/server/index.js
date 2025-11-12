@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import express from "express";
 import { Server } from "socket.io";
 import { getNextWord } from "./aiClient.js";
+import { start } from "repl";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -93,6 +94,8 @@ function emitUpdate(room, tag = "") {
 }
 
 function startRound(room) {
+  if (room.roundTimer) clearTimeout(room.roundTimer);
+  room.deadline = 0; // reset any old timer
   room.round = room.history.length + 1;
   room.deadline = nowMs() + ROUND_SECONDS * 1000;
 
@@ -173,6 +176,62 @@ io.on("connection", socket => {
     emitUpdate(room, "created");
   });
 
+    function resetRoom(room) {
+    room.status = "waiting";
+    room.round = 0;
+    room.history = [];
+    room.deadline = 0;
+    room.lastHuman = "";
+    room.lastAI = "";
+    room.prevHuman = "";
+    room.prevAI = "";
+    room.submittedHuman = false;
+    room.submittedAI = false;
+    room.roundClosed = false;
+    room.rematchVotes.clear?.();
+    if (room.roundTimer) clearTimeout(room.roundTimer);
+    if (room.afkTimer) clearTimeout(room.afkTimer);
+  }
+
+
+  function startCountdown(room) {
+  if (!rooms.has(room.code)) return;
+
+  // Reset all round state and timers to clean slate
+  if (room.roundTimer) clearTimeout(room.roundTimer);
+  room.deadline = 0; // reset any old timer
+  room.round = 0;
+  room.lastHuman = "";
+  room.lastAI = "";
+  room.prevHuman = "";
+  room.prevAI = "";
+  room.history = [];
+  room.submittedHuman = false;
+  room.submittedAI = false;
+  room.roundClosed = false;
+  room.win = null;
+
+  // Begin countdown phase
+  room.status = "countdown";
+    emitUpdate(room, "countdown");
+
+    let seconds = 3;
+    const interval = setInterval(() => {
+      io.to(room.code).emit("game:countdown", { seconds });
+      seconds -= 1;
+      if (seconds < 0) {
+        clearInterval(interval);
+
+        // Always ensure a fresh deadline at start of play
+        room.deadline = nowMs() + ROUND_SECONDS * 1000;
+        room.status = "playing";
+        startRound(room);
+      }
+    }, 1000);
+  }
+
+
+
   // Play with AI: start immediately
   socket.on("room:create:ai", ({ name }) => {
     const room = makeRoom();
@@ -183,7 +242,7 @@ io.on("connection", socket => {
     socket.join(room.code);
     setActive(room);
     emitUpdate(room, "createAI");
-    startRound(room);
+    startCountdown(room);
   });
 
   // Join by code
@@ -197,11 +256,11 @@ io.on("connection", socket => {
     if (room.status === "waiting" && room.players.length >= 2) {
       room.status = "playing";
       emitUpdate(room, "join");
-      startRound(room);
-    } else {
-      emitUpdate(room, "join");
+      startCountdown(room);
     }
   });
+
+
 
   function handleLeave(socket) {
     for (const room of rooms.values()) {

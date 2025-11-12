@@ -146,11 +146,47 @@
     // ---------- socket ----------
     const socket = io();
 
+    socket.on("game:countdown", ({ seconds }) => {
+      if (!elStatus) return;
+
+      elStatus.style.color = "#ffcc00"; // gold/yellow for countdown
+      elStatus.style.fontWeight = "600";
+
+      if (seconds >= 0) {
+        elStatus.textContent = `Game starts in ${seconds}...`;
+      } else {
+        elStatus.textContent = "Go!";
+        setTimeout(() => {
+          setText(elStatus, "Playing");
+          elStatus.style.color = "#00ff88"; // green for active play
+        }, 500);
+      }
+    });
+
+
     socket.on("room:update", payload => {
       viewGame();
 
       if (payload.code) setRoomCode(payload.code);
-      if (payload.status) setText(elStatus, payload.status);
+      if (payload.status) {
+        switch (payload.status) {
+          case "waiting":
+            elStatus.textContent = "Waiting for teammate…";
+            elStatus.style.color = "#8888ff"; // bluish
+            break;
+          case "countdown":
+            elStatus.textContent = "Game starting soon…";
+            elStatus.style.color = "#ffcc00"; // gold
+            break;
+          case "playing":
+            elStatus.textContent = "Playing";
+            elStatus.style.color = "#00ff88"; // green
+            break;
+          default:
+            elStatus.textContent = payload.status;
+            elStatus.style.color = "#ffffff";
+        }
+      }
       if (payload.players) {
         renderPlayers(payload.players);
         const a = payload.players[0]?.name || "Player A";

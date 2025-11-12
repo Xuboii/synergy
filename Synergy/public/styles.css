@@ -193,3 +193,15 @@ h2, h3 { margin: 6px 0 10px 0; }
 .copied-indicator.fade-out {
   opacity: 0;
 }
+
+#status {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+
+@keyframes pulse {
+  from { opacity: 1; }
+  to { opacity: 0.4; }
+}
