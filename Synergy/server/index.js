@@ -6,7 +6,6 @@ import { fileURLToPath } from "url";
 import express from "express";
 import { Server } from "socket.io";
 import { getNextWord } from "./aiClient.js";
-import { start } from "repl";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,14 +43,14 @@ function makeRoom() {
     round: 0,
     deadline: 0,
     players: [],              // [{id, name}]
-    history: [],              // [{round, human, ai}]  slots A,B
+    history: [],              // [{round, human, ai}]
     // current round state
     lastHuman: "",
     lastAI: "",
     submittedHuman: false,
     submittedAI: false,
     roundClosed: false,
-    // previous valid pair (both were real, not "(no guess)")
+    // previous valid pair
     prevHuman: "",
     prevAI: "",
     // timers
@@ -93,9 +92,10 @@ function emitUpdate(room, tag = "") {
   });
 }
 
+// Starts a normal 30s round. Only call this after the 3..2..1 countdown completes.
 function startRound(room) {
-  if (room.roundTimer) clearTimeout(room.roundTimer);
-  room.deadline = 0; // reset any old timer
+  if (!rooms.has(room.code)) return;
+
   room.round = room.history.length + 1;
   room.deadline = nowMs() + ROUND_SECONDS * 1000;
 
@@ -113,7 +113,44 @@ function startRound(room) {
     maybeFinishRound(room);
   }, ROUND_SECONDS * 1000);
 
+  room.status = "playing";
   emitUpdate(room, "roundStart");
+}
+
+// Clean slate countdown that does NOT tick the 30s yet
+function startCountdown(room) {
+  if (!rooms.has(room.code)) return;
+
+  // Reset all round state and timers
+  if (room.roundTimer) clearTimeout(room.roundTimer);
+  room.round = 0;
+  room.deadline = 0;
+  room.history = [];
+  room.lastHuman = "";
+  room.lastAI = "";
+  room.prevHuman = "";
+  room.prevAI = "";
+  room.submittedHuman = false;
+  room.submittedAI = false;
+  room.roundClosed = false;
+  room.win = null;
+
+  room.status = "countdown";
+  emitUpdate(room, "countdown");
+
+  let seconds = 3;
+
+  io.to(room.code).emit("game:countdown", { seconds });
+
+  const interval = setInterval(() => {
+    seconds -= 1;
+    io.to(room.code).emit("game:countdown", { seconds });
+    if (seconds < 0) {
+      clearInterval(interval);
+      // begin normal play. startRound will set deadline and the 30s server timer.
+      startRound(room);
+    }
+  }, 1000);
 }
 
 function wordsUsedSoFar(room) {
@@ -169,80 +206,23 @@ io.on("connection", socket => {
 
   // Create Room: human mode, wait for teammate
   socket.on("room:create", ({ name }) => {
-    const room = makeRoom(); // mode stays "human"
+    const room = makeRoom(); // human by default
     room.players.push({ id: socket.id, name: name || "Player" });
     socket.join(room.code);
     setActive(room);
     emitUpdate(room, "created");
   });
 
-    function resetRoom(room) {
-    room.status = "waiting";
-    room.round = 0;
-    room.history = [];
-    room.deadline = 0;
-    room.lastHuman = "";
-    room.lastAI = "";
-    room.prevHuman = "";
-    room.prevAI = "";
-    room.submittedHuman = false;
-    room.submittedAI = false;
-    room.roundClosed = false;
-    room.rematchVotes.clear?.();
-    if (room.roundTimer) clearTimeout(room.roundTimer);
-    if (room.afkTimer) clearTimeout(room.afkTimer);
-  }
-
-
-  function startCountdown(room) {
-  if (!rooms.has(room.code)) return;
-
-  // Reset all round state and timers to clean slate
-  if (room.roundTimer) clearTimeout(room.roundTimer);
-  room.deadline = 0; // reset any old timer
-  room.round = 0;
-  room.lastHuman = "";
-  room.lastAI = "";
-  room.prevHuman = "";
-  room.prevAI = "";
-  room.history = [];
-  room.submittedHuman = false;
-  room.submittedAI = false;
-  room.roundClosed = false;
-  room.win = null;
-
-  // Begin countdown phase
-  room.status = "countdown";
-    emitUpdate(room, "countdown");
-
-    let seconds = 3;
-    const interval = setInterval(() => {
-      io.to(room.code).emit("game:countdown", { seconds });
-      seconds -= 1;
-      if (seconds < 0) {
-        clearInterval(interval);
-
-        // Always ensure a fresh deadline at start of play
-        room.deadline = nowMs() + ROUND_SECONDS * 1000;
-        room.status = "playing";
-        startRound(room);
-      }
-    }, 1000);
-  }
-
-
-
-  // Play with AI: start immediately
+  // Play with AI: start right away with a countdown
   socket.on("room:create:ai", ({ name }) => {
     const room = makeRoom();
     room.mode = "ai";
     room.players.push({ id: socket.id, name: name || "Player" });
     room.players.push({ id: "AI", name: "AI" });
-    room.status = "playing";
     socket.join(room.code);
     setActive(room);
     emitUpdate(room, "createAI");
-    startCountdown(room);
+    startCountdown(room); // 3..2..1 then startRound
   });
 
   // Join by code
@@ -253,51 +233,39 @@ io.on("connection", socket => {
     socket.join(room.code);
     setActive(room);
 
+    // When second player joins a human room, begin countdown
     if (room.status === "waiting" && room.players.length >= 2) {
-      room.status = "playing";
       emitUpdate(room, "join");
       startCountdown(room);
+    } else {
+      emitUpdate(room, "join");
     }
   });
 
-
-
-  function handleLeave(socket) {
+  // Leave or go back to lobby
+  function handleLeave() {
     for (const room of rooms.values()) {
       const ix = room.players.findIndex(p => p.id === socket.id);
       if (ix >= 0) {
-        const leaver = room.players[ix];
-        const isAI = room.mode === "ai";
-
         room.players.splice(ix, 1);
 
-        // Notify teammate only if human room
         if (room.mode === "human") {
           socket.to(room.code).emit("room:closed", { text: "Your teammate left" });
         }
 
-        // Clean up
         if (room.roundTimer) clearTimeout(room.roundTimer);
         if (room.afkTimer) clearTimeout(room.afkTimer);
         rooms.delete(room.code);
         break;
       }
     }
-
     socket.leaveAll();
-    // Tell only the leaver to reset quietly
+    // tell the leaver to reset views immediately
     socket.emit("room:left");
   }
 
-  io.on("connection", socket => {
-    socket.on("room:leave", () => handleLeave(socket));
-    socket.on("rematch:leave", () => handleLeave(socket));
-
-    // ... (keep the rest of your logic unchanged)
-  });
-
-
-
+  socket.on("room:leave", handleLeave);
+  socket.on("rematch:leave", handleLeave);
 
   // Submit word
   socket.on("game:submit", async ({ word }) => {
@@ -334,13 +302,13 @@ io.on("connection", socket => {
       return;
     }
 
-    // AI mode: human in slot A submits, server fills slot B if it is truly AI
+    // AI mode: human in slot A submits, server fills slot B
     if (room.mode === "ai" && bId === "AI" && socket.id === aId && !room.submittedHuman) {
       room.lastHuman = clean;
       room.submittedHuman = true;
 
       try {
-        const exclude = wordsUsedSoFar(room); // excludes only earlier rounds
+        const exclude = wordsUsedSoFar(room);
         const prevH = room.prevHuman || "";
         const prevA = room.prevAI || "";
         const aiWord = await getNextWord(prevH, prevA, exclude);
@@ -354,8 +322,6 @@ io.on("connection", socket => {
       await maybeFinishRound(room);
       return;
     }
-
-    // ignore anything else
   });
 
   // Rematch request
@@ -376,7 +342,8 @@ io.on("connection", socket => {
     });
 
     if (room.rematchVotes.size >= room.players.length) {
-      room.status = "playing";
+      // full reset then countdown again
+      room.status = "waiting";
       room.round = 0;
       room.history = [];
       room.lastHuman = "";
@@ -390,11 +357,10 @@ io.on("connection", socket => {
       room.rematchVotes.clear();
 
       emitUpdate(room, "rematchBegin");
-      startRound(room);
+      startCountdown(room);
       io.to(room.code).emit("rematch:begin");
     }
   });
-
 
   // Disconnect
   socket.on("disconnect", () => {

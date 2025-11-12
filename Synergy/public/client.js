@@ -13,7 +13,7 @@
 
     const inName          = document.getElementById("name");
     const btnCreate       = document.getElementById("createBtn");
-    const btnCreateAI     = document.getElementById("createAIBtn"); // "Play with AI"
+    const btnCreateAI     = document.getElementById("createAIBtn");
     const inJoinCode      = document.getElementById("joinCode");
     const btnJoin         = document.getElementById("joinBtn");
 
@@ -72,6 +72,14 @@
     let timerId = null;
     let playerNames = ["Player A", "Player B"];
 
+    function resetRoundUI() {
+      if (timerId) clearInterval(timerId);
+      setText(elCountdown, "30s left");
+      show(elCountdown);
+      lockSubmit(false, "");
+    }
+
+    // Only start ticking when server sends a deadline
     function startTimer(deadlineMs) {
       if (timerId) clearInterval(timerId);
       const tick = () => {
@@ -146,47 +154,56 @@
     // ---------- socket ----------
     const socket = io();
 
+    // Countdown banner
     socket.on("game:countdown", ({ seconds }) => {
       if (!elStatus) return;
 
-      elStatus.style.color = "#ffcc00"; // gold/yellow for countdown
+      elStatus.style.color = "#ffcc00";
       elStatus.style.fontWeight = "600";
 
       if (seconds >= 0) {
         elStatus.textContent = `Game starts in ${seconds}...`;
+        // show a static 30s so players see the round limit, but no ticking yet
+        setText(elCountdown, "30s left");
       } else {
         elStatus.textContent = "Go!";
         setTimeout(() => {
           setText(elStatus, "Playing");
-          elStatus.style.color = "#00ff88"; // green for active play
+          elStatus.style.color = "#00ff88";
         }, 500);
       }
     });
-
 
     socket.on("room:update", payload => {
       viewGame();
 
       if (payload.code) setRoomCode(payload.code);
+
       if (payload.status) {
         switch (payload.status) {
           case "waiting":
             elStatus.textContent = "Waiting for teammate…";
-            elStatus.style.color = "#8888ff"; // bluish
+            elStatus.style.color = "#8888ff";
             break;
           case "countdown":
             elStatus.textContent = "Game starting soon…";
-            elStatus.style.color = "#ffcc00"; // gold
+            elStatus.style.color = "#ffcc00";
             break;
           case "playing":
             elStatus.textContent = "Playing";
-            elStatus.style.color = "#00ff88"; // green
+            elStatus.style.color = "#00ff88";
             break;
           default:
             elStatus.textContent = payload.status;
             elStatus.style.color = "#ffffff";
         }
       }
+
+      if (payload.status === "waiting" || payload.status === "countdown") {
+        if (timerId) clearInterval(timerId);
+        setText(elCountdown, "30s left");
+      }
+      
       if (payload.players) {
         renderPlayers(payload.players);
         const a = payload.players[0]?.name || "Player A";
@@ -200,7 +217,8 @@
         lockSubmit(true, "Waiting for teammate…");
       } else {
         show(elCountdown);
-        if (payload.deadline) startTimer(payload.deadline);
+        // Only start the ticking timer once we are actually playing
+        if (payload.status === "playing" && payload.deadline) startTimer(payload.deadline);
       }
 
       const tag = payload.tag || "";
@@ -232,14 +250,13 @@
       setRoomCode(null);
     });
 
-        // Instantly return to lobby if player intentionally left
+    // Instantly return to lobby if player intentionally left
     socket.on("room:left", () => {
       if (timerId) clearInterval(timerId);
       setRoomCode(null);
       lockSubmit(false, "");
-      viewLobby(); // instantly go to lobby view, no intermediate message
+      viewLobby();
     });
-
 
     // show duplicate word error and unlock input
     socket.on("game:error", ({ text }) => {
@@ -253,11 +270,13 @@
     // ---------- lobby actions ----------
     btnCreate.addEventListener("click", () => {
       const name = (inName.value || "").trim();
+      resetRoundUI();
       socket.emit("room:create", { name });
     });
 
     btnCreateAI.addEventListener("click", () => {
       const name = (inName.value || "").trim();
+      resetRoundUI();
       socket.emit("room:create:ai", { name });
     });
 
