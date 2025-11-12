@@ -196,6 +196,15 @@
       setRoomCode(null);
     });
 
+        // Instantly return to lobby if player intentionally left
+    socket.on("room:left", () => {
+      if (timerId) clearInterval(timerId);
+      setRoomCode(null);
+      lockSubmit(false, "");
+      viewLobby(); // instantly go to lobby view, no intermediate message
+    });
+
+
     // show duplicate word error and unlock input
     socket.on("game:error", ({ text }) => {
       setText(elWaitMsg, text || "Invalid word");

@@ -203,30 +203,41 @@ io.on("connection", socket => {
     }
   });
 
-  // Leave from lobby or game. Only notify others.
- socket.on("room:leave", () => {
-  for (const room of rooms.values()) {
-    const ix = room.players.findIndex(p => p.id === socket.id);
-    if (ix >= 0) {
-      room.players.splice(ix, 1);
+  function handleLeave(socket) {
+    for (const room of rooms.values()) {
+      const ix = room.players.findIndex(p => p.id === socket.id);
+      if (ix >= 0) {
+        const leaver = room.players[ix];
+        const isAI = room.mode === "ai";
 
-      // If it’s a human-vs-human lobby, notify teammate.
-      if (room.mode === "human") {
-        socket.to(room.code).emit("room:closed", { text: "Your teammate left" });
+        room.players.splice(ix, 1);
+
+        // Notify teammate only if human room
+        if (room.mode === "human") {
+          socket.to(room.code).emit("room:closed", { text: "Your teammate left" });
+        }
+
+        // Clean up
+        if (room.roundTimer) clearTimeout(room.roundTimer);
+        if (room.afkTimer) clearTimeout(room.afkTimer);
+        rooms.delete(room.code);
+        break;
       }
-
-      // Clean up memory regardless of mode
-      if (room.roundTimer) clearTimeout(room.roundTimer);
-      if (room.afkTimer) clearTimeout(room.afkTimer);
-      rooms.delete(room.code);
-      break;
     }
-  }
-  socket.leaveAll();
 
-  // Tell the leaving client to reset cleanly
-  socket.emit("room:closed", { text: "Returned to lobby" });
+    socket.leaveAll();
+    // Tell only the leaver to reset quietly
+    socket.emit("room:left");
+  }
+
+  io.on("connection", socket => {
+    socket.on("room:leave", () => handleLeave(socket));
+    socket.on("rematch:leave", () => handleLeave(socket));
+
+    // ... (keep the rest of your logic unchanged)
   });
+
+
 
 
   // Submit word
@@ -325,20 +336,6 @@ io.on("connection", socket => {
     }
   });
 
-  // Leave from results screen
-  socket.on("rematch:leave", () => {
-    for (const room of rooms.values()) {
-      const ix = room.players.findIndex(p => p.id === socket.id);
-      if (ix >= 0) {
-        room.players.splice(ix, 1);
-        socket.to(room.code).emit("room:closed", { text: "Your teammate left" });
-        if (room.roundTimer) clearTimeout(room.roundTimer);
-        rooms.delete(room.code);
-        break;
-      }
-    }
-    socket.leaveAll();
-  });
 
   // Disconnect
   socket.on("disconnect", () => {
