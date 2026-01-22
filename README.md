@@ -63,6 +63,25 @@ AI Backend (FastAPI)
     |
 OpenAI Model
 
+**AI Behavior Summary**
+
+The AI teammate:
+Sees only the previous round word pair
+Attempts to converge on the most obvious shared association
+Avoids repeating any previously used words
+Falls back to neutral seed words if needed
+Runs entirely server side to keep API keys secure
+
+**Why This Project**
+
+This project demonstrates:
+Real time multiplayer system design
+WebSocket based game state synchronization
+Clean client server separation
+Secure AI integration with no client exposed secrets
+Cloud native deployment on Google Cloud Run
+Production ready structure suitable for scaling
+This project is designed to be showcased directly via its live deployment and does not require Chrome Web Store publication.
 
 Author
 Eric Xu
