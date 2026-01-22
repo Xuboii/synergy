@@ -45,6 +45,67 @@ FastAPI,
 OpenAI Responses API, 
 HTTPX async client
 
+## Architecture Overview
+
+**Synergy Web App (Google Cloud Run)**
+- Client (Browser UI)
+  - Lobby UI
+    - Display name input
+    - Create room, join room, play with AI
+    - Room code display and copy
+  - Game UI
+    - Teammate list and status
+    - 3..2..1 countdown
+    - 30 second round timer
+    - Word submission form and input locking
+    - Round history table
+  - Results UI
+    - Match result and win screen
+    - Rematch flow
+    - Return to lobby
+  - Socket.IO Client
+    - Real time room updates
+    - Word submission events
+    - Countdown and deadline synchronization
+
+- Realtime Game Server (Node.js, Express, Socket.IO)
+  - Static asset hosting
+    - Serves frontend from `/public`
+    - Health endpoint (`GET /healthz`)
+  - Room orchestration
+    - Create room, join by code, leave handling
+    - Human vs Human and Human vs AI modes
+    - Disconnect handling and room cleanup
+    - Inactivity timeout and auto close
+  - Round engine
+    - Countdown orchestration (3..2..1)
+    - 30 second server enforced deadline
+    - Submission tracking and round resolution
+    - Match detection and win condition
+    - Rematch voting and reset
+  - Validation
+    - Duplicate word prevention across rounds
+    - `(no guess)` handling for missed submissions
+
+**AI Backend Service (FastAPI, Google Cloud Run)**
+- REST API
+  - Next word endpoint (`POST /nextword`)
+  - Health endpoint (`GET /healthz`)
+- Word generation pipeline
+  - Prompting for convergent teammate matching
+  - Exclude list support to avoid repeats
+  - Output sanitization (single lowercase word)
+  - Fallback seed words if OpenAI is unavailable
+
+**External Services**
+- OpenAI Responses API
+  - Generates the AI teammate's next word using the previous round pair
+  - Only called from the AI backend service
+
+All AI requests are routed through the AI backend.  
+Client side code never exposes API keys.
+
+
 
 **AI Behavior Summary**
 
