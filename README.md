@@ -66,10 +66,10 @@ OpenAI Model
 **AI Behavior Summary**
 
 The AI teammate:
-Sees only the previous round word pair
-Attempts to converge on the most obvious shared association
-Avoids repeating any previously used words
-Falls back to neutral seed words if needed
+Sees only the previous round word pair and
+attempts to converge on the most obvious shared association.
+Avoids repeating any previously used words.
+Falls back to neutral seed words if needed.
 Runs entirely server side to keep API keys secure
 
 **Why This Project**
