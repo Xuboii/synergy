@@ -1,7 +1,8 @@
 **Synergy**
 
+Playable at https://synergy-game-977938858735.us-west1.run.app/
 
-Synergy is a real time cooperative word association game where two players attempt to independently submit the same word. Players must think alike without communicating directly. The game supports both human teammates and an AI teammate powered by OpenAI.
+Synergy is a real time cooperative word association game where two players attempt to independently submit the same word. Players must think alike without communicating directly. The game supports both human teammates and an AI teammate powered by OpenAI. This project is fully deployed on Google Cloud and is intended as a portfolio ready, production style application.
 
 This project demonstrates full stack development with real time networking, AI integration, and production ready deployment practices.
 
@@ -44,20 +45,24 @@ FastAPI
 OpenAI Responses API
 HTTPX async client
 
+User Browser
+    |
+    |  HTTPS
+    |
+Frontend (HTML, CSS, JS)
+    |
+    |  WebSocket (Socket.IO)
+    |
+Game Server (Node.js + Express)
+    |
+    |  HTTP REST
+    |
+AI Backend (FastAPI)
+    |
+    |  OpenAI Responses API
+    |
+OpenAI Model
 
-/
-├── server/
-│   ├── index.js        # Express + Socket.IO game server
-│   └── aiClient.js     # AI service client
-│
-├── ai/
-│   ├── main.py         # FastAPI AI backend
-│   └── requirements.txt
-│
-├── public/
-│   ├── index.html
-│   ├── client.js
-│   └── styles.css
-│
-└── README.md
 
+Author
+Eric Xu
