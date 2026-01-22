@@ -43,3 +43,21 @@ Python
 FastAPI
 OpenAI Responses API
 HTTPX async client
+
+
+/
+├── server/
+│   ├── index.js        # Express + Socket.IO game server
+│   └── aiClient.js     # AI service client
+│
+├── ai/
+│   ├── main.py         # FastAPI AI backend
+│   └── requirements.txt
+│
+├── public/
+│   ├── index.html
+│   ├── client.js
+│   └── styles.css
+│
+└── README.md
+
