@@ -31,37 +31,20 @@ Designed for easy deployment and portfolio use
 
 Tech Stack
 
-Frontend
-Vanilla JavaScript
-HTML and CSS
-Socket.IO client
-Backend
-Node.js
-Express
-Socket.IO server
-AI Service
-Python
-FastAPI
-OpenAI Responses API
+Frontend, 
+Vanilla JavaScript, 
+HTML and CSS, 
+Socket.IO client, 
+Backend, 
+Node.js, 
+Express, 
+Socket.IO server, 
+AI Service, 
+Python, 
+FastAPI, 
+OpenAI Responses API, 
 HTTPX async client
 
-User Browser
-    |
-    |  HTTPS
-    |
-Frontend (HTML, CSS, JS)
-    |
-    |  WebSocket (Socket.IO)
-    |
-Game Server (Node.js + Express)
-    |
-    |  HTTP REST
-    |
-AI Backend (FastAPI)
-    |
-    |  OpenAI Responses API
-    |
-OpenAI Model
 
 **AI Behavior Summary**
 
