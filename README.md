@@ -5,7 +5,7 @@ Synergy is a real time cooperative word association game where two players attem
 
 This project demonstrates full stack development with real time networking, AI integration, and production ready deployment practices.
 
-How the Game Works
+**How the Game Works**
 
 Two players join the same room using a short room code
 Each round, both players privately submit one word
